@@ -6,11 +6,27 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.4.1",
-    "jax-metal>=0.1.1",
+    "jax[cuda12]",
     "maturin>=1.9.6",
     "pyarrow>=22.0.0",
     "tiktoken>=0.12.0",
     "zarr>=3.1.3",
+]
+
+[project.optional-dependencies]
+metal = ["jax-metal>=0.1.1"]
+cpu = ["jax"]
+
+[tool.uv]
+conflicts = [
+    [
+        { package = "jax" },
+        { extra = "metal" },
+    ],
+    [
+        { package = "jax" },
+        { extra = "cpu" },
+    ],
 ]
 
 [build-system]
