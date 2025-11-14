@@ -1,3 +1,0 @@
-  - uv sync - installs jax with cuda12 (default)
-  - uv sync --extra metal - installs jax-metal for apple silicon
-  - uv sync --extra cpu - installs cpu-only jax

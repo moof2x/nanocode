@@ -8,4 +8,4 @@ class GPTConfig:
     n: int
 
 def get_gpt():
-    pass
+    
