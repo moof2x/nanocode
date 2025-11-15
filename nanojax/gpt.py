@@ -8,7 +8,9 @@
 # they come from https://github.com/openai/gpt-2/blob/master/src/model.py
 
 from dataclasses import dataclass
+import math
 import jax
+import jax.numpy as jnp
 from nanojax.common import fold_in_str
 from jax.tree_util import register_dataclass
 
@@ -27,12 +29,13 @@ jax_dataclass = lambda cls: register_dataclass(dataclass(cls))
 
 @dataclass
 class GPTConfig:
-    sequence_len: int
-    vocab_size: int
-    n_layer: int
-    n_head: int
-    n_kv_head: int
-    n_embed: int
+    # default GPT2-117M params (nanochat version)
+    sequence_len: int = 1024
+    vocab_size: int = 50304 # originally 50257, nanochat bumps it to the nearest multiple of 64
+    n_layer: int = 12
+    n_head: int = 12
+    n_kv_head: int = 12
+    n_embed: int = 768
 
 @jax_dataclass
 class MLP:
@@ -41,10 +44,10 @@ class MLP:
 
 @jax_dataclass
 class Attention:
-    q_proj: jax.Array # eQ [n_embed, n_head * head_dim]
-    k_proj: jax.Array # eK [n_embed, n_kv_head * head_dim]
-    v_proj: jax.Array # eK [n_embed, n_kv_head * head_dim]
-    o_proj: jax.Array # ee [n_embed, n_embed]
+    c_q: jax.Array # eQ [n_embed, n_head * head_dim]
+    c_k: jax.Array # eK [n_embed, n_kv_head * head_dim]
+    c_v: jax.Array # eK [n_embed, n_kv_head * head_dim]
+    c_proj: jax.Array # ee [n_embed, n_embed]
 
 @jax_dataclass
 class Block:
@@ -53,29 +56,60 @@ class Block:
 
 @jax_dataclass
 class GPT:
+    # in JAX we seperate "state" and "state transformations".
+    # Forward passes, graadient updates, etc. are all examples
+    # of purely functional transformations of state.
+
+    # GPT() creates a tree-like data container which houses model parameters
+    # and allows us to perform operations with JAX on this tree.
+    # GPT.init() is a factory method which initializes this data container
+    # with model parameters.
     wte: jax.Array # ve [vocab_size, n_embed] embedding layer
-    h: list[TransformerLayer] # n_layer transformer blocks
+    h: list[Block] # n_layer transformer blocks
     lm_head: jax.Array # ev [n_embed, vocab_size] output proj
 
     @staticmethod              
-    def init(cfg: GPTConfig, rng: jax.Array) -> "GPT":
-        # in JAX we seperate "state" and "state transformations".
-        # Forward passes, graadient updates, etc. are all examples
-        # of purely functional transformations of state.
-    
-        # GPT() creates a tree-like data container which houses model parameters
-        # and allows us to perform operations with JAX on this tree.
-        # GPT.init() is a factory method which initializes this data container
-        # with model parameters.
-        
+    def init(cfg: GPTConfig, rng: jax.Array) -> "GPT":        
         # random state must be explicitly managed in JAX by "splitting"
-        # random keys. fold_in_str does this based on the hash of a given string
-        wte = jax.random.normal(fold_in_str(rng, "wte"), (cfg.vocab_size, cfg.n_embed), dtype=jnp.float32)
-        
+        # random keys. fold_in_str does this by splitting the base key
+        # based on the hash of a given string - in this case the weight name.
+        std = 0.02
+        wte = jax.random.normal(fold_in_str(rng, "wte"), (cfg.vocab_size, cfg.n_embed)) * std
+        h = []
+        for _ in range(cfg.n_layer):
+            # TODO - why does nanochatdo some funky initialiation?
+            head_dim = cfg.n_embed // cfg.n_head
+            residual_std = std / math.sqrt(2 * cfg.n_layer)
+    
+            attn = Attention(
+                c_q=jax.random.normal(fold_in_str(rng, "c_q"), (cfg.n_embed, cfg.n_head * head_dim)) * std,
+                c_k=jax.random.normal(fold_in_str(rng, "k"), (cfg.n_embed, cfg.n_kv_head * head_dim)) *  std,
+                c_v=jax.random.normal(fold_in_str(rng, "v"), (cfg.n_embed, cfg.n_kv_head * head_dim)) * std,
+                c_proj=jax.random.normal(fold_in_str(rng, "o"), (cfg.n_embed, cfg.n_embed)) * residual_std,
+            )
+    
+            mlp = MLP(
+                c_fc=jax.random.normal(fold_in_str(rng, "c_fc"), (cfg.n_embed, 4 * cfg.n_embed)) * std,
+                c_proj=jax.random.normal(fold_in_str(rng, "c_proj"), (4 * cfg.n_embed, cfg.n_embed)) * residual_std,
+            )
+            h.append(Block(attn=attn, mlp=mlp))
+
+        # TODO - why does nanochat zero out classifier weights and c_proj in mlps?
+        lm_head = jax.random.normal(fold_in_str(rng, "lm_head"), (cfg.n_embed, cfg.vocab_size)) * std
+        return GPT(
+            wte=wte,
+            h=h,
+            lm_head=lm_head
+        )
         
     def forward(self, x: jax.Array):
+        # x: bs [batch_size, sequence_len]
 
         # MLP
         h = jnp.einsum("bse,eE->bsE", x, self.c_f)
-        h = jax.nn.gelu(x) # todo : does relu^2 work better?
+        h = jax.nn.gelu(x) # TODO why does nanochat use relu^2?
         h2 = jnp.einsum("bsE,Ee->bse", x, self.c_f)       
+
+
+rng = jax.random.key(42)
+model = GPT.init(GPTConfig(), rng)

@@ -1,5 +1,6 @@
 import os
 import jax
+import hashlib
 
 def fold_in_str(key: jax.Array, string: str) -> jax.Array:
     # https://github.com/MatX-inc/seqax/blob/main/jax_extra.py#L11
