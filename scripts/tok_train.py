@@ -4,7 +4,7 @@ Train a tokenizer using the HuggingFace Tokenizers library.
 In the style of GPT-4 tokenizer.
 
 This script is identical to karparthy/nanochat/scripts/tok_train.py
-but uses Zarr instead of torch to serialize
+but uses Zarr instead of torch to serialize token_bytes.py
 """
 import os
 import time
@@ -89,7 +89,7 @@ for token_id in range(vocab_size):
         id_bytes = len(token_str.encode("utf-8")) # number of bytes that make up this token
         token_bytes.append(id_bytes)
 token_bytes = np.array(token_bytes, dtype=np.int32)
-token_bytes_path = os.path.join(tokenizer_dir, "token_bytes.pt")
+token_bytes_path = os.path.join(tokenizer_dir, "token_bytes.zarr")
 zarr.save(token_bytes_path, token_bytes)
 print(f"Saved token_bytes to {token_bytes_path}")
 

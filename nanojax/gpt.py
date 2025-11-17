@@ -223,7 +223,6 @@ model = GPT.init(
 # out = model.forward(jnp.ones((10, 1024), dtype=jnp.uint32))
 idx = jnp.ones((4, 256)).astype(jnp.uint32)
 targets = jnp.ones((4, 1)).astype(jnp.uint32)
-print(cross_entropy)
 import pdb
 pdb.set_trace()
 x = 10
