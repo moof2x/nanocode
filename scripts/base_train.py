@@ -10,11 +10,11 @@ token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
 print(f"Vocab size: {vocab_size:,}")
 
-train_loader = tokenizing_data_loader(4, 1024, "train", tokenizer)
+train_loader = tokenizing_data_loader(2, 2048, "train", tokenizer)
 x, y = next(train_loader)
 
 rng = jax.random.key(42)
-config = GPTConfig(n_layer=4, n_head=2, n_kv_head=2, n_embed=256, vocab_size=vocab_size)
+config = GPTConfig(n_layer=5, n_head=4, n_kv_head=4, n_embed=320, vocab_size=vocab_size)
 model = GPT.init(
     config,
     rng
@@ -26,7 +26,7 @@ grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 @jax.jit
 def train_step(idx, targets, model, state):
     loss, grads = grad_fun(x, y, model)
-    updates, state = state.update(model, grads, 2e-3)
+    updates, state = state.update(model, grads, 1e-3)
     model = jax.tree.map(lambda p, u: p - u, model, updates)
     return model, state, loss
     
@@ -35,7 +35,11 @@ while True:
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
     x, y = next(train_loader)
-    jax.block_until_ready(loss)
-    step += 1
-    dt = time.perf_counter() - d0
-    print(f"Loss: {loss:.3f} | dt: {dt:.3f}s | tkps: {(x.size / dt):.3f}")
+    print(f"{step} | Loss: {loss:.3f} ")
+    step += 1 
+    if step % 10 == 0:
+        # log profiling every now and then
+        jax.block_until_ready(loss)
+        dt = time.perf_counter() - d0
+        print(f"\tdt: {dt:.3f}s | tkps: {(x.size / dt):.3f}")
+        print(f"\tTokens seen: {x.size * step}")
