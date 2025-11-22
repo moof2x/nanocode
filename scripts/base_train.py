@@ -26,7 +26,7 @@ grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 @jax.jit
 def train_step(idx, targets, model, state):
     loss, grads = grad_fun(x, y, model)
-    updates, state = state.update(model, grads, 2e-2)
+    updates, state = state.update(model, grads, 2e-3)
     model = jax.tree.map(lambda p, u: p - u, model, updates)
     return model, state, loss
     
@@ -35,7 +35,7 @@ while True:
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
     x, y = next(train_loader)
-    print
+    jax.block_until_ready(loss)
     step += 1
     dt = time.perf_counter() - d0
     print(f"Loss: {loss:.3f} | dt: {dt:.3f}s | tkps: {(x.size / dt):.3f}")
