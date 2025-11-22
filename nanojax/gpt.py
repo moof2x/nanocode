@@ -241,7 +241,7 @@ class AdamW:
         mu_ = jax.tree.map(lambda m: m / (1 - (self.b_1 ** self.step)), mu)
         nu_ = jax.tree.map(lambda v: v / (1 - (self.b_2 ** self.step)), nu)
         
-        updates = jax.tree.map(lambda p, m, v: p - (lr * m / (jnp.sqrt(v) + self.eps)) - (lr * self.wd * p),model, mu_, nu_)
+        updates = jax.tree.map(lambda p, m, v: (lr * m / (jnp.sqrt(v) + self.eps)) - (lr * self.wd * p),model, mu_, nu_)
 
         return updates, AdamW(mu=mu, nu=nu, step=self.step + 1)
 

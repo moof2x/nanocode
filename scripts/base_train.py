@@ -10,27 +10,23 @@ token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
 print(f"Vocab size: {vocab_size:,}")
 
-train_loader = tokenizing_data_loader(8, 1024, "train", tokenizer)
+train_loader = tokenizing_data_loader(4, 1024, "train", tokenizer)
 x, y = next(train_loader)
 
 rng = jax.random.key(42)
+config = GPTConfig(n_layer=4, n_head=2, n_kv_head=2, n_embed=256, vocab_size=vocab_size)
 model = GPT.init(
-    GPTConfig(
-        n_layer=4,
-        n_head=2,
-        n_kv_head=2,
-        n_embed=256,
-        vocab_size=50304
-    ),
+    config,
     rng
 )
+print(config)
 state = AdamW.init(model)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 
 @jax.jit
 def train_step(idx, targets, model, state):
     loss, grads = grad_fun(x, y, model)
-    updates, state = state.update(model, grads, 1e-3)
+    updates, state = state.update(model, grads, 2e-2)
     model = jax.tree.map(lambda p, u: p - u, model, updates)
     return model, state, loss
     
@@ -41,4 +37,5 @@ while True:
     x, y = next(train_loader)
     print
     step += 1
-    print(f"Loss: {loss:.3f} | dt: {(time.perf_counter() - d0):.3f}s")
+    dt = time.perf_counter() - d0
+    print(f"Loss: {loss:.3f} | dt: {dt:.3f}s | tkps: {(x.size / dt):.3f}")
