@@ -48,7 +48,7 @@ def apply_rope(x: jax.Array, cos: jax.Array, sin: jax.Array) -> jax.Array:
 class GPTConfig:
     # default GPT2-117M params 
     sequence_len: int = 1024
-    vocab_size: int # originally 50257, nanochat bumps it to the nearest multiple of 64. this should be inferred from the tokenizer though
+    vocab_size: int = 50304 # originally 50257, nanochat bumps it to the nearest multiple of 64. this should be inferred from the tokenizer though
     n_layer: int = 12
     n_head: int = 12
     n_kv_head: int = 12
