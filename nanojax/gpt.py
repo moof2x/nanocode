@@ -123,6 +123,7 @@ class GPT:
             h.append(Block(attn=attn, mlp=mlp))
 
         # TODO - why does nanochat zero out classifier weights and c_proj in mlps?
+        # ANSWER: see modded-nanogpt
         lm_head = jax.random.normal(fold_in_str(rng, "lm_head"), (cfg.n_embed, cfg.vocab_size)) * std
         return GPT(
             wte=wte,
@@ -191,7 +192,7 @@ class GPT:
             
             ### mlp
             x = jnp.einsum("bse,eE->bsE", x, mlp.c_fc.astype(jnp.bfloat16))
-            x = jax.nn.gelu(x) # TODO why does nanochat use relu^2?
+            x = jax.nn.gelu(x) # TODO why does nanochat use relu^2? ANSWER: see modded-nanogpt
             x = jnp.einsum("bsE,Ee->bse", x, mlp.c_proj.astype(jnp.bfloat16))
 
         x = rms_norm(x)
@@ -209,6 +210,42 @@ def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT) -> jax.Array:
     loss = loss.mean()
     return loss
 
+@partial(
+    register_dataclass,
+    data_fields=["mu", "nu"],
+    meta_fields=["b_1", "b_2", "eps", "wd", "step"]
+)
+@dataclass
+class AdamW:
+    mu: GPT
+    nu: GPT
+    b_1: float = 0.8
+    b_2: float = 0.95
+    eps: float = 1e-10
+    wd: float = 0.0
+    step: int = 1
+
+    @staticmethod              
+    def init(model: GPT):
+        mu = jax.tree.map(lambda p: p * 0.0, model)
+        nu = jax.tree.map(lambda p: p * 0.0, model)
+        return AdamW(mu, nu)
+
+    def update(self, model: GPT, grads, lr: float):
+        # update internal statistics based on gradients
+        # returns new updates and updated state
+        mu = jax.tree.map(lambda m, grad: m * self.b_1 + (1 - self.b_1) * grad, self.mu, grads)
+        nu = jax.tree.map(lambda v, grad: v * self.b_2 + (1 - self.b_2) * jax.lax.square(grad), self.nu, grads)
+
+        # bias updates
+        mu_ = jax.tree.map(lambda m: m / (1 - (self.b_1 ** self.step)), mu)
+        nu_ = jax.tree.map(lambda v: v / (1 - (self.b_2 ** self.step)), nu)
+        
+        updates = jax.tree.map(lambda p, m, v: p - (lr * m / (jnp.sqrt(v) + self.eps)) - (lr * self.wd * p),model, mu_, nu_)
+
+        return updates, AdamW(mu=mu, nu=nu, step=self.step + 1)
+
+    
 rng = jax.random.key(42)
 model = GPT.init(
     GPTConfig(
@@ -220,9 +257,18 @@ model = GPT.init(
     ),
     rng
 )
-# out = model.forward(jnp.ones((10, 1024), dtype=jnp.uint32))
-idx = jnp.ones((4, 256)).astype(jnp.uint32)
-targets = jnp.ones((4, 1)).astype(jnp.uint32)
-import pdb
-pdb.set_trace()
-x = 10
+
+# state = AdamW.init(model)
+# # out = model.forward(jnp.ones((10, 1024), dtype=jnp.uint32))
+# idx = jnp.ones((4, 256)).astype(jnp.uint32)
+# targets = jnp.ones((4, 1)).astype(jnp.uint32)
+# grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
+
+# def train_step(idx, targets, model, state):
+#     loss, grads = grad_fun(idx, targets, model)
+#     updates, state = state.update(model, grads, 1e-3)
+#     model = jax.tree.map(lambda p, u: p - u, model, updates)
+
+#     return model, state, loss
+# model_, state_, loss = train_step(idx, targets, model, state)
+# x = 10

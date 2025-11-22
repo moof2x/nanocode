@@ -262,9 +262,9 @@ def get_tokenizer():
     tokenizer_dir = os.path.join(base_dir, "tokenizer")
     return RustBPETokenizer.from_directory(tokenizer_dir)
 
-def get_token_bytes(device="cpu"):
-    import torch
+def get_token_bytes():
     from nanojax.common import get_base_dir
+    import zarr
     base_dir = get_base_dir()
     tokenizer_dir = os.path.join(base_dir, "tokenizer")
     token_bytes_path = os.path.join(tokenizer_dir, "token_bytes.zarr")

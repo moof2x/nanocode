@@ -3,12 +3,10 @@ from nanojax.dataset import parquets_iter_batched
 from nanojax.tokenizer import get_tokenizer
 import jax.numpy as jnp
 
-def tokenizing_data_loader(B, T, split, tokenizer_threads=4, tokenizer_batch_size=128):
+def tokenizing_data_loader(B, T, split, tokenizer, tokenizer_threads=4, tokenizer_batch_size=128):
     """Stream pretraining text from parquet files, tokenize, yield training batches."""
     assert split in ["train", "val"], "split must be 'train' or 'val'"
     needed_tokens = B * T + 1 # +1 is because we also need the target at the last token
-    # get the tokenizer and the bos token
-    tokenizer = get_tokenizer()
     bos_token = tokenizer.get_bos_token_id()
     # scratch buffer holds the tokens for one iteration
     token_buffer = deque() # we stream tokens on the right and pop from the left
@@ -22,7 +20,6 @@ def tokenizing_data_loader(B, T, split, tokenizer_threads=4, tokenizer_batch_siz
                 for i in range(0, len(batch), tokenizer_batch_size):
                     yield batch[i:i+tokenizer_batch_size]
     batches = document_batches()
-    print(batches)
     batch_index = 0
     while True:
         # Accumulate enough tokens for one iteration before yielding.
@@ -36,7 +33,7 @@ def tokenizing_data_loader(B, T, split, tokenizer_threads=4, tokenizer_batch_siz
         tokens = [token_buffer.popleft() for _ in range(needed_tokens)]
         # Create the inputs/targets and yield
         inputs = jnp.asarray(tokens[:-1], dtype=jnp.int32).reshape(B, T)
-        # JAX does not natively support double (see JAX gotcha), but this isn't really an issue
+        # JAX does not natively support int64 (see JAX gotcha), but this isn't really an issue
         # as torch's cross entropy requires int64 targets for only historical(?) reasons
         targets = jnp.asarray(tokens[1:], dtype=jnp.int32).reshape(B, T)
         yield inputs, targets
