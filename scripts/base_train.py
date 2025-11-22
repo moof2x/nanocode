@@ -16,11 +16,11 @@ x, y = next(train_loader)
 rng = jax.random.key(42)
 model = GPT.init(
     GPTConfig(
-        n_layer=1,
+        n_layer=4,
         n_head=2,
         n_kv_head=2,
-        n_embed=192,
-        vocab_size=1024
+        n_embed=256,
+        vocab_size=50304
     ),
     rng
 )
