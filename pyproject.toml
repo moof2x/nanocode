@@ -15,6 +15,7 @@ dependencies = [
 [project.optional-dependencies]
 cuda = ["jax[cuda12]"]
 cpu = ["jax"]
+tpu = ["jax[tpu]"]
 
 [build-system]
 requires = ["maturin>=1.7,<2.0"]
