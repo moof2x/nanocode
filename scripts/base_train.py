@@ -10,11 +10,12 @@ token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
 print(f"Vocab size: {vocab_size:,}")
 
-train_loader = tokenizing_data_loader(2, 2048, "train", tokenizer)
+train_loader = tokenizing_data_loader(1, 1024, "train", tokenizer)
 x, y = next(train_loader)
 
 rng = jax.random.key(42)
-config = GPTConfig(n_layer=1, n_head=4, n_kv_head=4, n_embed=320, vocab_size=vocab_size)
+# config = GPTConfig(n_layer=4, n_head=4, n_kv_head=4, n_embed=320, vocab_size=vocab_size)
+config = GPTConfig(vocab_size=vocab_size)
 model = GPT.init(
     config,
     rng
@@ -37,7 +38,7 @@ while True:
     x, y = next(train_loader)
     print(f"{step} | Loss: {loss:.3f} ")
     step += 1 
-    if step % 1 == 0:
+    if step % 10 == 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
         dt = time.perf_counter() - d0
