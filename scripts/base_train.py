@@ -14,7 +14,7 @@ train_loader = tokenizing_data_loader(2, 2048, "train", tokenizer)
 x, y = next(train_loader)
 
 rng = jax.random.key(42)
-config = GPTConfig(n_layer=5, n_head=4, n_kv_head=4, n_embed=320, vocab_size=vocab_size)
+config = GPTConfig(n_layer=1, n_head=4, n_kv_head=4, n_embed=320, vocab_size=vocab_size)
 model = GPT.init(
     config,
     rng
@@ -25,7 +25,7 @@ grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 
 @jax.jit
 def train_step(idx, targets, model, state):
-    loss, grads = grad_fun(x, y, model)
+    loss, grads = grad_fun(idx, targets, model)
     updates, state = state.update(model, grads, 1e-3)
     model = jax.tree.map(lambda p, u: p - u, model, updates)
     return model, state, loss
@@ -37,7 +37,7 @@ while True:
     x, y = next(train_loader)
     print(f"{step} | Loss: {loss:.3f} ")
     step += 1 
-    if step % 10 == 0:
+    if step % 1 == 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
         dt = time.perf_counter() - d0

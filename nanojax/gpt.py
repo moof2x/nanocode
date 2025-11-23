@@ -212,8 +212,8 @@ def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT) -> jax.Array:
 
 @partial(
     register_dataclass,
-    data_fields=["mu", "nu"],
-    meta_fields=["b_1", "b_2", "eps", "wd", "step"]
+    data_fields=["mu", "nu", "step"],
+    meta_fields=["b_1", "b_2", "eps", "wd"]
 )
 @dataclass
 class AdamW:
