@@ -9,6 +9,7 @@ dependencies = [
     "maturin>=1.9.6",
     "pyarrow>=22.0.0",
     "tiktoken>=0.12.0",
+    "trackio>=0.9.1",
     "zarr>=3.1.3",
 ]
 

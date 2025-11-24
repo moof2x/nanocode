@@ -191,10 +191,12 @@ class GPT:
             x = x + attn_out
             
             ### mlp
-            x = jnp.einsum("bse,eE->bsE", x, mlp.c_fc.astype(jnp.bfloat16))
-            x = jax.nn.gelu(x) # TODO why does nanochat use relu^2? ANSWER: see modded-nanogpt
-            x = jnp.einsum("bsE,Ee->bse", x, mlp.c_proj.astype(jnp.bfloat16))
-
+            mlp_in = rms_norm(x)
+            mlp_out = jnp.einsum("bse,eE->bsE", mlp_in, mlp.c_fc.astype(jnp.bfloat16))
+            mlp_out = jax.nn.gelu(mlp_out) # TODO why does nanochat use relu^2? ANSWER: see modded-nanogpt
+            mlp_out = jnp.einsum("bsE,Ee->bse", mlp_out, mlp.c_proj.astype(jnp.bfloat16))
+            x = x + mlp_out
+            
         x = rms_norm(x)
         # note: we calculate logits and CE in fp32, so no weight downcasting here
         logits = jnp.einsum("bse,ev->bsv", x, self.lm_head)

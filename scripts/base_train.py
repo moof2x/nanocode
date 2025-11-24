@@ -1,50 +1,59 @@
 from nanojax.dataloader import tokenizing_data_loader
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
 from nanojax.gpt import GPT, calculate_loss, AdamW, GPTConfig
-from nanojax.configs import d6_35m
+from nanojax.configs import d6_23m, d3_4m
+from dataclasses import asdict
 import operator
 import time
 import jax
 import jax.numpy as jnp
 import math
-# jax.config.update('jax_compiler_enable_remat_pass', False)
-# Tokenizer will be useful for evaluation, also we need the vocab size
+import trackio
+
 tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
 print(f"Vocab size: {vocab_size:,}")
 
-batch_size = 8
-grad_accm_steps = 1# 256 // 8
+rng = jax.random.key(42)
+config = d6_23m
+lr = 8e-4
+batch_size = 512
+minibatch_size = 32
+grad_accm_steps = batch_size // minibatch_size
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
-minibatch_size = batch_size // grad_accm_steps
 
-train_loader = tokenizing_data_loader(batch_size, 1024, "train", tokenizer)
+train_loader = tokenizing_data_loader(batch_size, config.sequence_len, "train", tokenizer)
 x, y = next(train_loader)
 
-rng = jax.random.key(42)
-# config = GPTConfig(n_layer=1, n_head=4, n_kv_head=4, n_embed=320, vocab_size=vocab_size)
-config = d6_35m
 assert vocab_size == config.vocab_size, f"mismatch between tokenizer vocab_size ({vocab_size}) and config vocab_size ({config.vocab_size})"
-# config = GPTConfig(vocab_size=vocab_size)
 model = GPT.init(
     config,
     rng
 )
 print(config)
-
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
 total_tokens = num_params * 20
 num_steps = math.ceil(total_tokens / config.sequence_len / batch_size)
+expected_loss = 1.8172 + 482.01/(num_params)**0.3478 + 2085.43/(total_tokens)**0.3658
 print(f"{num_params} model parameters")
-print(f"training on {total_tokens} tokens over {num_steps} steps")
+print(f"Training on {total_tokens} tokens over {num_steps} steps")
+print(f"Expected final loss: {expected_loss:.4f}")
+print("="*20)
 
 state = AdamW.init(model)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 
-@jax.jit
-def train_step(idx, targets, model, state):
+trackio.init(
+    project="nanojax",
+    config=asdict(config)
+)
 
+
+
+@jax.jit()
+def train_step(idx, targets, model, state):
+    
     def inner_step(carry, j):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
         targets_ = jax.lax.dynamic_slice_in_dim(targets, j * minibatch_size, minibatch_size, axis=0)
@@ -57,7 +66,7 @@ def train_step(idx, targets, model, state):
     grads = jax.tree.map(lambda g: g / grad_accm_steps, grads)
     loss /= grad_accm_steps
     
-    updates, state = state.update(model, grads, 1e-3)
+    updates, state = state.update(model, grads, lr)
     model = jax.tree.map(lambda p, u: p - u, model, updates)
     return model, state, loss
     
@@ -66,14 +75,18 @@ while True:
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
     x, y = next(train_loader)
-    print(f"Step {step}/{num_steps} | Loss: {loss:.3f} ")
+    log_dict = {"loss": float(loss)}
+    print(f"Step {step}/{num_steps} | Loss: {loss:.3f} / {expected_loss:.3f} ")
     step += 1 
-    if step % 2 == 0:
+    if step % 20 == 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
         dt = time.perf_counter() - d0
-        print(f"\tdt: {dt:.3f}s | tkps: {(x.size / dt):.3f}")
-        print(f"\tTokens seen: {x.size * step}")
-        print(f"Expected time remaining: {(((num_steps - step) * dt)/60):.3f} min")
+        print(f"\tdt: {dt:.3f}s | tkps: {int(x.size // dt)}")
+        print(f"\tTokens seen: {x.size * step} / {total_tokens} ({((x.size * step / total_tokens) * 100):.2f}%)")
+        print(f"\tEstimated time remaining: {(((num_steps - step) * dt)/60):.1f} min")
+        log_dict["tkps"] = int(x.size // dt)
+    trackio.log(log_dict)
     if step == num_steps:
         break
+trackio.finish()
