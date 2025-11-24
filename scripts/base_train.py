@@ -1,6 +1,7 @@
 from nanojax.dataloader import tokenizing_data_loader
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
-from nanojax.gpt import GPT, calculate_loss, AdamW, GPTConfig
+from nanojax.gpt import GPT, calculate_loss, GPTConfig
+from nanojax.adamw import AdamW
 from nanojax.configs import d6_23m, d3_4m
 from dataclasses import asdict
 import operator
@@ -16,9 +17,9 @@ vocab_size = tokenizer.get_vocab_size()
 print(f"Vocab size: {vocab_size:,}")
 
 rng = jax.random.key(42)
-config = d6_23m
-lr = 8e-4
-batch_size = 512
+config = d3_4m
+lr = 3e-4
+batch_size = 32
 minibatch_size = 32
 grad_accm_steps = batch_size // minibatch_size
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
@@ -49,9 +50,7 @@ trackio.init(
     config=asdict(config)
 )
 
-
-
-@jax.jit()
+@jax.jit
 def train_step(idx, targets, model, state):
     
     def inner_step(carry, j):
@@ -78,7 +77,7 @@ while True:
     log_dict = {"loss": float(loss)}
     print(f"Step {step}/{num_steps} | Loss: {loss:.3f} / {expected_loss:.3f} ")
     step += 1 
-    if step % 20 == 0:
+    if step % 1 == 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
         dt = time.perf_counter() - d0
