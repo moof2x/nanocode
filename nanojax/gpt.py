@@ -179,13 +179,14 @@ class GPT:
             k = rms_norm(k)
 
             # scaled dot product attention
-            scores = jnp.einsum("bsqh,bSkh->bsSh", q, k)
-            scores =  jnp.where(mask, scores, -1e10) / jnp.sqrt(h)
-            # we typically softmax in fp32 
-            probs = jax.nn.softmax(scores.astype(jnp.float32), axis=-1).astype(jnp.bfloat16)
-            attn_out = jnp.einsum("bsSh,bskh->bskh", probs, v).astype(jnp.bfloat16)
+            attn_out = jax.nn.dot_product_attention(q, k, v)
+            # scores = jnp.einsum("bsqh,bSkh->bsSh", q, k)
+            # scores =  jnp.where(mask, scores, -1e10) / jnp.sqrt(h)
+            # # we typically softmax in fp32 
+            # probs = jax.nn.softmax(scores.astype(jnp.float32), axis=-1).astype(jnp.bfloat16)
+            # attn_out = jnp.einsum("bsSh,bskh->bskh", probs, v).astype(jnp.bfloat16)
             attn_out = attn_out.reshape(b, s, cfg.n_embed)
-            attn_out = jnp.einsum("bse,eE->bsE", attn_out, attn.c_proj.astype(jnp.bfloat16))
+            # attn_out = jnp.einsum("bse,eE->bsE", attn_out, attn.c_proj.astype(jnp.bfloat16))
 
             # residual connection with the pre-norm block input
             x = x + attn_out
