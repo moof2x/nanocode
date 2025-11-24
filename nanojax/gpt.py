@@ -28,8 +28,9 @@ from functools import partial
 
 def rms_norm(x: jax.Array) -> jax.Array:
     # performing rms norm in fp32 is typically more numerically stable
-    mean = jnp.mean(jax.lax.square(jnp.float32(x)), axis=-1, keepdims=True)
-    return jnp.bfloat16(x * jax.lax.rsqrt(mean + 1e-6))
+    x_out = x.astype(jnp.float32)
+    mean = jnp.mean(jax.lax.square(x_out), axis=-1, keepdims=True)
+    return (x_out * jax.lax.rsqrt(mean + 1e-6)).astype(x.dtype)
 
 def apply_rope(x: jax.Array, cos: jax.Array, sin: jax.Array) -> jax.Array:
     # x: typically bsQ embedding
@@ -132,7 +133,7 @@ class GPT:
             cfg=cfg
         )
         
-    def forward(self, idx: jax.Array):
+    def forward(self, idx: jax.Array, compute_dtype: jnp.dtype):
         cfg = self.cfg        
         b, s =  idx.shape
         # one slight downside to working in pure JAX is that we don't have a nice
@@ -145,10 +146,9 @@ class GPT:
         # with the benefit of finer-grained control over mixed precision.
         
         # project our tokens into embedding space
-        x = jnp.einsum("bs,ve->bse", idx, self.wte.astype(jnp.bfloat16))
-
-        # create our causal mask
-        mask = jnp.tril(jnp.ones((s, s), dtype=jnp.bool))[None, :, :, None]
+        x = self.wte[idx].astype(compute_dtype) # jnp.einsum("bs,ve->bse", idx, self.wte.astype(compute_dtype))
+        # create our causal mask ( not needed for jax sdpa)
+        #mask = jnp.tril(jnp.ones((s, s), dtype=jnp.bool))[None, :, :, None]
         
         for block in self.h:
             attn, mlp = block.attn, block.mlp
@@ -156,9 +156,9 @@ class GPT:
             attn_in = rms_norm(x)
 
             ### causal self attention
-            q = jnp.einsum("bse,eQ->bsQ", attn_in, attn.c_q.astype(jnp.bfloat16)).reshape(b, s, cfg.n_head, h)
-            k = jnp.einsum("bse,eK->bsK", attn_in, attn.c_k.astype(jnp.bfloat16)).reshape(b, s, cfg.n_kv_head, h)
-            v = jnp.einsum("bse,eK->bsK", attn_in, attn.c_v.astype(jnp.bfloat16)).reshape(b, s, cfg.n_kv_head, h)
+            q = jnp.einsum("bse,eQ->bsQ", attn_in, attn.c_q.astype(compute_dtype)).reshape(b, s, cfg.n_head, h)
+            k = jnp.einsum("bse,eK->bsK", attn_in, attn.c_k.astype(compute_dtype)).reshape(b, s, cfg.n_kv_head, h)
+            v = jnp.einsum("bse,eK->bsK", attn_in, attn.c_v.astype(compute_dtype)).reshape(b, s, cfg.n_kv_head, h)
             
             # apply rotary embeddings (on-the-fly) to our queries, keys, and values
             # we operate on every pair of dimensions, so stride our embed dim by 2
@@ -171,41 +171,41 @@ class GPT:
             # each position, then unsqueeze so we can broadcast along the n_head dim
             theta = jnp.einsum("s,c->sc", t, inv_freq)
             cos, sin = jnp.cos(theta)[:, None, :], jnp.sin(theta)[:, None, :]
-            # perform the rope scaling in fp32, and cast back down
-            q = apply_rope(q, cos, sin).astype(jnp.bfloat16)
-            k = apply_rope(k, cos, sin).astype(jnp.bfloat16)
+
+            q = apply_rope(q, cos, sin)
+            k = apply_rope(k, cos, sin)
             # QK norm
             q = rms_norm(q)
             k = rms_norm(k)
 
             # scaled dot product attention
-            attn_out = jax.nn.dot_product_attention(q, k, v)
+            attn_out = jax.nn.dot_product_attention(q, k, v, is_causal=True)
             # scores = jnp.einsum("bsqh,bSkh->bsSh", q, k)
             # scores =  jnp.where(mask, scores, -1e10) / jnp.sqrt(h)
             # # we typically softmax in fp32 
-            # probs = jax.nn.softmax(scores.astype(jnp.float32), axis=-1).astype(jnp.bfloat16)
-            # attn_out = jnp.einsum("bsSh,bskh->bskh", probs, v).astype(jnp.bfloat16)
+            # probs = jax.nn.softmax(scores.astype(jnp.float32), axis=-1).astype(compute_dtype)
+            # attn_out = jnp.einsum("bsSh,bskh->bskh", probs, v).astype(compute_dtype)
             attn_out = attn_out.reshape(b, s, cfg.n_embed)
-            # attn_out = jnp.einsum("bse,eE->bsE", attn_out, attn.c_proj.astype(jnp.bfloat16))
+            attn_out = jnp.einsum("bse,eE->bsE", attn_out, attn.c_proj.astype(compute_dtype))
 
             # residual connection with the pre-norm block input
             x = x + attn_out
             
             ### mlp
             mlp_in = rms_norm(x)
-            mlp_out = jnp.einsum("bse,eE->bsE", mlp_in, mlp.c_fc.astype(jnp.bfloat16))
+            mlp_out = jnp.einsum("bse,eE->bsE", mlp_in, mlp.c_fc.astype(compute_dtype))
             mlp_out = jax.nn.gelu(mlp_out) # TODO why does nanochat use relu^2? ANSWER: see modded-nanogpt
-            mlp_out = jnp.einsum("bsE,Ee->bse", mlp_out, mlp.c_proj.astype(jnp.bfloat16))
+            mlp_out = jnp.einsum("bsE,Ee->bse", mlp_out, mlp.c_proj.astype(compute_dtype))
             x = x + mlp_out
             
         x = rms_norm(x)
         # note: we calculate logits and CE in fp32, so no weight downcasting here
-        logits = jnp.einsum("bse,ev->bsv", x, self.lm_head)
+        logits = jnp.einsum("bse,ev->bsv", x.astype(jnp.float32), self.lm_head)
         return logits
 
-def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT) -> jax.Array:
+def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT, dtype: jnp.dtype) -> jax.Array:
     # TODO try logit softcapping
-    logits = model.forward(idx)
+    logits = model.forward(idx, dtype)
     # cross entropy loss using logsumexp
     logsumexp = jax.nn.logsumexp(logits, axis=-1)
     # TODO add support for ignore index

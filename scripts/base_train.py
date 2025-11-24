@@ -14,7 +14,7 @@ import trackio
 tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
-print(f"Vocab size: {vocab_size:,}")
+print(f"Vocab size: {vocab_size}")
 
 rng = jax.random.key(42)
 config = d3_4m
@@ -42,6 +42,7 @@ print(f"Training on {total_tokens} tokens over {num_steps} steps")
 print(f"Expected final loss: {expected_loss:.4f}")
 print("="*20)
 
+compute_dtype = jnp.float32
 state = AdamW.init(model)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 
@@ -57,7 +58,7 @@ def train_step(idx, targets, model, state):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
         targets_ = jax.lax.dynamic_slice_in_dim(targets, j * minibatch_size, minibatch_size, axis=0)
 
-        loss, grads = grad_fun(idx_, targets_, model)
+        loss, grads = grad_fun(idx_, targets_, model, compute_dtype)
         loss_accm, grads_accm = carry
         return (loss_accm + loss, jax.tree.map(jnp.add, grads_accm, grads)), None
 
