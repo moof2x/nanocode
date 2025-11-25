@@ -14,7 +14,6 @@ import jax.numpy as jnp
 class AdamW:
     mu: GPT
     nu: GPT
-    # lr: GPT # per-parameter-group learning rates
     b_1: float = 0.8
     b_2: float = 0.95
     eps: float = 1e-10
@@ -25,8 +24,7 @@ class AdamW:
     def init(model: GPT):
         mu = jax.tree.map(lambda p: p * 0.0, model)
         nu = jax.tree.map(lambda p: p * 0.0, model)
-        
-        
+
         return AdamW(mu, nu)
 
     def update(self, model: GPT, grads, lr: float):

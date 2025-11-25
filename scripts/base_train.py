@@ -17,10 +17,10 @@ vocab_size = tokenizer.get_vocab_size()
 print(f"Vocab size: {vocab_size}")
 
 rng = jax.random.key(42)
-config = d3_4m
-lr = 3e-4
-batch_size = 128
-minibatch_size = 128
+config = d6_23m
+lr = 8e-4
+batch_size = 64
+minibatch_size = 32
 grad_accm_steps = batch_size // minibatch_size
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
 
