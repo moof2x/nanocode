@@ -1,5 +1,4 @@
 from nanojax.gpt import GPTConfig
-from functools import partial
 
 # this is roughly the GPT2-small hyper-params
 # you'd end must closer to the original 117M param count without tied weights 

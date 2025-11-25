@@ -19,8 +19,8 @@ print(f"Vocab size: {vocab_size}")
 rng = jax.random.key(42)
 config = d3_4m
 lr = 3e-4
-batch_size = 32
-minibatch_size = 32
+batch_size = 128
+minibatch_size = 128
 grad_accm_steps = batch_size // minibatch_size
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
 
@@ -78,7 +78,7 @@ while True:
     log_dict = {"loss": float(loss)}
     print(f"Step {step}/{num_steps} | Loss: {loss:.3f} / {expected_loss:.3f} ")
     step += 1 
-    if step % 1 == 0:
+    if step % 100 == 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
         dt = time.perf_counter() - d0
