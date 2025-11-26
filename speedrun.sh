@@ -7,13 +7,13 @@
 
 # all the setup stuff
 export OMP_NUM_THREADS=1
-export NANOJAX_BASE_DIR="$HOME/.cache/nanojax"
+export NANOJAX_BASE_DIR="$HOME/.cache/nanojax_d12"
 mkdir -p $NANOJAX_BASE_DIR
 
 # train tokenizer on ~1B characters
 rm -rf "$NANOJAX_BASE_DIR/tokenizer"
-python -m nanojax.dataset -n 4
-python -m scripts.tok_train --max_chars=1000000000
+python -m nanojax.dataset -n 16
+python -m scripts.tok_train --max_chars=2000000000
 python -m scripts.tok_eval
 exit 1
 # train a very small 4 layer model on the CPU

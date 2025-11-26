@@ -2,6 +2,7 @@ from nanojax.dataloader import tokenizing_data_loader
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
 from nanojax.gpt import GPT, calculate_loss, GPTConfig
 from nanojax.adamw import AdamW
+from nanojax.muon import Muon
 from nanojax.configs import d6_23m, d3_4m
 from dataclasses import asdict
 import operator
@@ -17,10 +18,10 @@ vocab_size = tokenizer.get_vocab_size()
 print(f"Vocab size: {vocab_size}")
 
 rng = jax.random.key(42)
-config = d6_23m
-lr = 8e-4
+config = d3_4m
+lr = 3e-4
 batch_size = 64
-minibatch_size = 32
+minibatch_size = 64
 grad_accm_steps = batch_size // minibatch_size
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
 
@@ -35,7 +36,7 @@ model = GPT.init(
 print(config)
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
 total_tokens = num_params * 20
-num_steps = math.ceil(total_tokens / config.sequence_len / batch_size)
+num_steps = math.ceil(total_tokens / config.sequence_len / batch_size) + 1
 expected_loss = 1.8172 + 482.01/(num_params)**0.3478 + 2085.43/(total_tokens)**0.3658
 print(f"{num_params} model parameters")
 print(f"Training on {total_tokens} tokens over {num_steps} steps")
@@ -43,7 +44,7 @@ print(f"Expected final loss: {expected_loss:.4f}")
 print("="*20)
 
 compute_dtype = jnp.float32
-state = AdamW.init(model)
+state = Muon.init(model)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 
 trackio.init(
@@ -66,11 +67,11 @@ def train_step(idx, targets, model, state):
     grads = jax.tree.map(lambda g: g / grad_accm_steps, grads)
     loss /= grad_accm_steps
     
-    updates, state = state.update(model, grads, lr)
+    updates, state = state.update(model, grads, lr, step)
     model = jax.tree.map(lambda p, u: p - u, model, updates)
     return model, state, loss
     
-step = 0    
+step = 1    
 while True:
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
@@ -78,7 +79,7 @@ while True:
     log_dict = {"loss": float(loss)}
     print(f"Step {step}/{num_steps} | Loss: {loss:.3f} / {expected_loss:.3f} ")
     step += 1 
-    if step % 100 == 0:
+    if step % 1 == 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
         dt = time.perf_counter() - d0
