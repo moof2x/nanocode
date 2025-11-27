@@ -1,6 +1,5 @@
 from collections import deque
 from nanojax.dataset import parquets_iter_batched
-from nanojax.tokenizer import get_tokenizer
 import jax.numpy as jnp
 
 def tokenizing_data_loader(B, T, split, tokenizer, tokenizer_threads=4, tokenizer_batch_size=128):

@@ -70,7 +70,15 @@ def train_step(idx, targets, model, state):
     updates, state = state.update(model, grads, lr, step)
     model = jax.tree.map(lambda p, u: p - u, model, updates)
     return model, state, loss
-    
+
+
+prompts = [
+    ["The capital of Paris is "],
+    ["Einstein's special theory of relatively states that energy"],
+    ["The closest planet to the sun is"]
+]
+prompt_idx = [tokenizer.encode(p, prepend=tokenizer.get_bos_token_id()) for p in prompts]
+prompt_idx = [jnp.asarray(p, dtype=jnp.int32) for p in prompt_idx]
 step = 1    
 while True:
     d0 = time.perf_counter()
@@ -79,7 +87,7 @@ while True:
     log_dict = {"loss": float(loss)}
     print(f"Step {step}/{num_steps} | Loss: {loss:.3f} / {expected_loss:.3f} ")
     step += 1 
-    if step % 1 == 0:
+    if step % 100 == 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
         dt = time.perf_counter() - d0
@@ -87,6 +95,15 @@ while True:
         print(f"\tTokens seen: {x.size * step} / {total_tokens} ({((x.size * step / total_tokens) * 100):.2f}%)")
         print(f"\tEstimated time remaining: {(((num_steps - step) * dt)/60):.1f} min")
         log_dict["tkps"] = int(x.size // dt)
+
+    if step % 500== 0:
+        for idx in prompt_idx:
+            for i in range(10):
+                logits = model.forward(idx, compute_dtype)[:, -1, :] # bsv -> bv
+                pred = jnp.argmax(logits, axis=-1, keepdims=True)
+                idx = jnp.concat([idx, pred], axis=1)
+            print(tokenizer.decode(idx[0]))
+
     trackio.log(log_dict)
     if step == num_steps:
         break
