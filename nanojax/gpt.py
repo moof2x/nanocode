@@ -14,6 +14,7 @@ import jax.numpy as jnp
 from nanojax.common import fold_in_str
 from jax.tree_util import register_dataclass
 from functools import partial
+import operator
 
 # einsum notation:
 #    b: batch
@@ -104,22 +105,22 @@ class GPT:
         std = 0.02
         wte = jax.random.normal(fold_in_str(rng, "wte"), (cfg.vocab_size, cfg.n_embed)) * std
         h = []
-        for _ in range(cfg.n_layer):
+        for i in range(cfg.n_layer):
             # regular mean-zero, std 0.02 weight initialisation
             # TODO - why does nanochat do some funky initialiation?
             head_dim = cfg.n_embed // cfg.n_head
             resid_std = std / math.sqrt(2 * cfg.n_layer)
     
             attn = Attention(
-                c_q=jax.random.normal(fold_in_str(rng, "c_q"), (cfg.n_embed, cfg.n_head * head_dim)) * std,
-                c_k=jax.random.normal(fold_in_str(rng, "k"), (cfg.n_embed, cfg.n_kv_head * head_dim)) * std,
-                c_v=jax.random.normal(fold_in_str(rng, "v"), (cfg.n_embed, cfg.n_kv_head * head_dim)) * std,
-                c_proj=jax.random.normal(fold_in_str(rng, "o"), (cfg.n_embed, cfg.n_embed)) * resid_std,
+                c_q=jax.random.normal(fold_in_str(rng, f"{i}_c_q"), (cfg.n_embed, cfg.n_head * head_dim)) * std,
+                c_k=jax.random.normal(fold_in_str(rng, f"{i}_k"), (cfg.n_embed, cfg.n_kv_head * head_dim)) * std,
+                c_v=jax.random.normal(fold_in_str(rng, f"{i}_v"), (cfg.n_embed, cfg.n_kv_head * head_dim)) * std,
+                c_proj=jax.random.normal(fold_in_str(rng, f"{i}_o"), (cfg.n_embed, cfg.n_embed)) * resid_std,
             )
     
             mlp = MLP(
-                c_fc=jax.random.normal(fold_in_str(rng, "c_fc"), (cfg.n_embed, 4 * cfg.n_embed)) * std,
-                c_proj=jax.random.normal(fold_in_str(rng, "c_proj"), (4 * cfg.n_embed, cfg.n_embed)) * resid_std,
+                c_fc=jax.random.normal(fold_in_str(rng, f"{i}_c_fc"), (cfg.n_embed, 4 * cfg.n_embed)) * std,
+                c_proj=jax.random.normal(fold_in_str(rng, f"{i}_c_proj"), (4 * cfg.n_embed, cfg.n_embed)) * resid_std,
             )
             h.append(Block(attn=attn, mlp=mlp))
 
@@ -164,7 +165,7 @@ class GPT:
             # we operate on every pair of dimensions, so stride our embed dim by 2
             # we're fixing base_theta to be 10K for now
             channel_range = jnp.arange(0, h, 2, dtype=jnp.float32)
-            inv_freq = 1.0 / (1e5 ** (channel_range / h))
+            inv_freq = 1.0 / (1e4 ** (channel_range / h))
             # token sequence positions: 0,1,2,...,s
             t = jnp.arange(s, dtype=jnp.float32)
             # calculate the angle by which each pair of dimensions should rotate at
@@ -202,6 +203,14 @@ class GPT:
         # note: we calculate logits and CE in fp32, so no weight downcasting here
         logits = jnp.einsum("bse,ev->bsv", x.astype(jnp.float32), self.lm_head)
         return logits
+
+def estimate_flops(model: GPT):
+    num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
+    wte_params = model.wte.size
+    l, h, q, t = model.cfg.n_layer, model.cfg.n_head, model.cfg.n_embed // model.cfg.n_head, model.cfg.sequence_len
+    num_flops_per_token = 6 * (num_params - wte_params) + 12 * l * h * q * t
+    return num_flops_per_token
+
 
 def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT, dtype: jnp.dtype) -> jax.Array:
     # TODO try logit softcapping

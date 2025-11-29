@@ -1,6 +1,6 @@
 from nanojax.dataloader import tokenizing_data_loader
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
-from nanojax.gpt import GPT, calculate_loss, GPTConfig
+from nanojax.gpt import GPT, calculate_loss, GPTConfig,estimate_flops
 from nanojax.adamw import AdamW
 from nanojax.muon import Muon
 from nanojax.configs import d6_23m, d3_4m
@@ -43,6 +43,8 @@ print(f"Training on {total_tokens} tokens over {num_steps} steps")
 print(f"Expected final loss: {expected_loss:.4f}")
 print("="*20)
 
+num_flops_per_token = estimate_flops(model)
+print(f"Estimated FLOPs per token: {num_flops_per_token}")
 compute_dtype = jnp.float32
 state = Muon.init(model)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
@@ -71,11 +73,10 @@ def train_step(idx, targets, model, state):
     model = jax.tree.map(lambda p, u: p - u, model, updates)
     return model, state, loss
 
-
 prompts = [
-    ["The capital of Paris is "],
+    ["The capital of France is "],
     ["Einstein's special theory of relatively states that energy"],
-    ["The closest planet to the sun is"]
+    ["The closest planet to the Sun is"]
 ]
 prompt_idx = [tokenizer.encode(p, prepend=tokenizer.get_bos_token_id()) for p in prompts]
 prompt_idx = [jnp.asarray(p, dtype=jnp.int32) for p in prompt_idx]
@@ -87,16 +88,18 @@ while True:
     log_dict = {"loss": float(loss)}
     print(f"Step {step}/{num_steps} | Loss: {loss:.3f} / {expected_loss:.3f} ")
     step += 1 
-    if step % 100 == 0:
+    if step % 10 == 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
         dt = time.perf_counter() - d0
-        print(f"\tdt: {dt:.3f}s | tkps: {int(x.size // dt)}")
+        flops_per_sec = num_flops_per_token * x.size / dt
+        mfu = 100 * flops_per_sec / 11.15e12# 2080 super FLOPs/sec
+        print(f"\tdt: {dt:.3f}s | tkps: {int(x.size // dt)} | mfu: {mfu:.2f}")
         print(f"\tTokens seen: {x.size * step} / {total_tokens} ({((x.size * step / total_tokens) * 100):.2f}%)")
         print(f"\tEstimated time remaining: {(((num_steps - step) * dt)/60):.1f} min")
         log_dict["tkps"] = int(x.size // dt)
 
-    if step % 500== 0:
+    if step % 50== 0:
         for idx in prompt_idx:
             for i in range(10):
                 logits = model.forward(idx, compute_dtype)[:, -1, :] # bsv -> bv

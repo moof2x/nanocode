@@ -6,9 +6,6 @@ from nanojax.tokenizer import get_tokenizer
 compute_dtype = jnp.float32
 
 def generate(model: GPT, idx: int, n_steps: int, rng, temperature: float=1.0, top_k:int=None):
-    # prefill - get the logits for the first token
-    # def generate_step(i, idx):
-        # sample from the predicted logit
     
     for i in range(n_steps):
         print(idx.shape)
@@ -18,10 +15,6 @@ def generate(model: GPT, idx: int, n_steps: int, rng, temperature: float=1.0, to
 
     return idx
         
-    # then loop for n_steps, predicting one token at a time
-    # sampling that token, adding it to the prediction, then
-    # looping again
-    # return jax.lax.fori_loop(0, n_steps, generate_step, idx)
     
 from nanojax.configs import d3_4m
 

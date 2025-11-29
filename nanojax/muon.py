@@ -61,7 +61,7 @@ class Muon:
 
         ### muon updates
         # momentum scheduler
-        frac = min(step / 300, 1)
+        frac = jnp.minimum(step / 300, 1)
         momentum = (1 - frac) * 0.85 + frac * 0.95
         mu = jax.tree.map(lambda m, g: m * momentum + (1 - momentum) * g, self.mu, grads.h)
         # nesterov update
