@@ -87,7 +87,6 @@ while True:
     x, y = next(train_loader)
     log_dict = {"loss": float(loss)}
     print(f"Step {step}/{num_steps} | Loss: {loss:.3f} / {expected_loss:.3f} ")
-    step += 1 
     if step % 10 == 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
@@ -107,6 +106,7 @@ while True:
                 idx = jnp.concat([idx, pred], axis=1)
             print(tokenizer.decode(idx[0]))
 
+    step += 1 
     trackio.log(log_dict)
     if step == num_steps:
         break

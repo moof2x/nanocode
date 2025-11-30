@@ -43,7 +43,7 @@ def apply_rope(x: jax.Array, cos: jax.Array, sin: jax.Array) -> jax.Array:
     y1 = x1 * cos - x2 * sin
     y2 = x1 * sin + x2 * cos
     # stitch our embedding vector back up
-    return jnp.append(y1, y2, axis=-1)
+    return jnp.concatenate([y1, y2], axis=-1)
 
 
 @dataclass

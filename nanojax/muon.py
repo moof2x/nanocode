@@ -65,7 +65,7 @@ class Muon:
         momentum = (1 - frac) * 0.85 + frac * 0.95
         mu = jax.tree.map(lambda m, g: m * momentum + (1 - momentum) * g, self.mu, grads.h)
         # nesterov update
-        v = jax.tree.map(lambda m, g: g * (1 - momentum) + momentum * g, mu, grads.h)
+        v = jax.tree.map(lambda m, g: g * (1 - momentum) + momentum * m, mu, grads.h)
 
         def newton_shulz(G: jax.Array, ns_steps: int):
             a, b, c = (3.4445, -4.7750,  2.0315)
@@ -86,7 +86,7 @@ class Muon:
             G = G.astype(jnp.float32)
             return G
 
-        muon_update = jax.tree.map(lambda u, g: newton_shulz(u, self.ns_steps) * (max(1, g.shape[-2] / g.shape[-1]))**0.5, v, grads.h)
+        muon_update = jax.tree.map(lambda u, g: newton_shulz(u, self.ns_steps) * (jnp.maximum(1, g.shape[-2] / g.shape[-1]))**0.5, v, grads.h)
 
         updates = GPT(
             wte=adamw_update[0],
