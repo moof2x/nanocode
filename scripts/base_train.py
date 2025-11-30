@@ -45,7 +45,7 @@ print("="*20)
 
 num_flops_per_token = estimate_flops(model)
 print(f"Estimated FLOPs per token: {num_flops_per_token}")
-compute_dtype = jnp.float32
+compute_dtype = jnp.bfloat16
 state = Muon.init(model)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 

@@ -172,6 +172,7 @@ class GPT:
             # each position, then unsqueeze so we can broadcast along the n_head dim
             theta = jnp.einsum("s,c->sc", t, inv_freq)
             cos, sin = jnp.cos(theta)[:, None, :], jnp.sin(theta)[:, None, :]
+            cos, sin = cos.astype(compute_dtype), sin.astype(compute_dtype)
 
             q = apply_rope(q, cos, sin)
             k = apply_rope(k, cos, sin)
@@ -221,30 +222,3 @@ def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT, dtype: jnp.dt
     loss = -jnp.take_along_axis(logits, targets[:, :, None], axis=-1).squeeze(-1) + logsumexp
     loss = loss.mean()
     return loss
-
-rng = jax.random.key(42)
-model = GPT.init(
-    GPTConfig(
-        n_layer=1,
-        n_head=2,
-        n_kv_head=2,
-        n_embed=192,
-        vocab_size=1024
-    ),
-    rng
-)
-
-# state = AdamW.init(model)
-# # out = model.forward(jnp.ones((10, 1024), dtype=jnp.uint32))
-# idx = jnp.ones((4, 256)).astype(jnp.uint32)
-# targets = jnp.ones((4, 1)).astype(jnp.uint32)
-# grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
-
-# def train_step(idx, targets, model, state):
-#     loss, grads = grad_fun(idx, targets, model)
-#     updates, state = state.update(model, grads, 1e-3)
-#     model = jax.tree.map(lambda p, u: p - u, model, updates)
-
-#     return model, state, loss
-# model_, state_, loss = train_step(idx, targets, model, state)
-# x = 10
