@@ -13,7 +13,7 @@ def save_checkpoint(filename: Path, state: GPT | Muon):
     state, _ = jax.tree.flatten_with_path(state)
     root = zarr.open_group(filename, mode="w-")
     for path, arr in state:
-        root[jax.tree_util.keyPath(path)] = np.asarray(arr)
+        root[jax.tree_util.keystr(path)] = np.asarray(arr)
 
 
 def load_checkpoint(filename: Path, state: GPT | Muon):

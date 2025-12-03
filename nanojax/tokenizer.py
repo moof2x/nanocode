@@ -6,6 +6,7 @@ import copy
 import os
 import pickle
 from functools import lru_cache
+from pathlib import Path
 
 import tiktoken
 
@@ -60,9 +61,8 @@ class RustBPETokenizer:
         return cls(enc, "<|bos|>")
 
     @classmethod
-    def from_directory(cls, tokenizer_dir):
-        pickle_path = os.path.join(tokenizer_dir, "tokenizer.pkl")
-        with open(pickle_path, "rb") as f:
+    def from_directory(cls, tokenizer_dir: Path):
+        with open(tokenizer_dir / "tokenizer.pkl", "rb") as f:
             enc = pickle.load(f)
         return cls(enc, "<|bos|>")
 
@@ -125,10 +125,10 @@ class RustBPETokenizer:
     def decode(self, ids):
         return self.enc.decode(ids)
 
-    def save(self, tokenizer_dir):
+    def save(self, tokenizer_dir: Path):
         # save the encoding object to disk
-        os.makedirs(tokenizer_dir, exist_ok=True)
-        pickle_path = os.path.join(tokenizer_dir, "tokenizer.pkl")
+        tokenizer_dir.mkdir(parents=True, exist_ok=True)
+        pickle_path = tokenizer_dir / "tokenizer.pkl"
         with open(pickle_path, "wb") as f:
             pickle.dump(self.enc, f)
         print(f"Saved tokenizer encoding to {pickle_path}")
@@ -259,17 +259,15 @@ class RustBPETokenizer:
 
 def get_tokenizer():
     from nanojax.common import get_base_dir
-    base_dir = get_base_dir()
-    tokenizer_dir = os.path.join(base_dir, "tokenizer")
-    return RustBPETokenizer.from_directory(tokenizer_dir)
+    return RustBPETokenizer.from_directory(get_base_dir() / "tokenizer")
 
 def get_token_bytes():
     import zarr
 
     from nanojax.common import get_base_dir
-    base_dir = get_base_dir()
-    tokenizer_dir = os.path.join(base_dir, "tokenizer")
-    token_bytes_path = os.path.join(tokenizer_dir, "token_bytes.zarr")
-    assert os.path.exists(token_bytes_path), f"Token bytes not found at {token_bytes_path}? It gets written by tok_train.py"
+    tokenizer_dir = get_base_dir() / "tokenizer"
+    token_bytes_path = tokenizer_dir / "token_bytes.zarr"
+    
+    assert token_bytes_path.exists(), f"Token bytes not found at {token_bytes_path}? It gets written by tok_train.py"
     token_bytes = zarr.load(token_bytes_path)
     return token_bytes

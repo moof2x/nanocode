@@ -60,8 +60,7 @@ print(f"Training time: {train_time:.2f}s")
 
 # -----------------------------------------------------------------------------
 # Save the tokenizer to disk
-base_dir = get_base_dir()
-tokenizer_dir = os.path.join(base_dir, "tokenizer")
+tokenizer_dir = get_base_dir() / "tokenizer"
 tokenizer.save(tokenizer_dir)
 
 # -----------------------------------------------------------------------------
@@ -92,7 +91,7 @@ for token_id in range(vocab_size):
         id_bytes = len(token_str.encode("utf-8")) # number of bytes that make up this token
         token_bytes.append(id_bytes)
 token_bytes = np.array(token_bytes, dtype=np.int32)
-token_bytes_path = os.path.join(tokenizer_dir, "token_bytes.zarr")
+token_bytes_path = tokenizer_dir / "token_bytes.zarr" 
 zarr.save(token_bytes_path, token_bytes)
 print(f"Saved token_bytes to {token_bytes_path}")
 

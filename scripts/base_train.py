@@ -22,7 +22,7 @@ tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
 base_dir = get_base_dir()
-checkpoint_dir = os.path.join()
+checkpoint_dir = base_dir / "base_checkpoints"
 print(f"Vocab size: {vocab_size}")
 command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
 print(command)
@@ -120,5 +120,6 @@ while True:
     if step == num_steps:
         break
 
-
+save_checkpoint(checkpoint_dir / "model.zarr", model)
+save_checkpoint(checkpoint_dir / "state.zarr", state) 
 trackio.finish()
