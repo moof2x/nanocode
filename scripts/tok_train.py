@@ -6,14 +6,17 @@ In the style of GPT-4 tokenizer.
 This script is identical to karparthy/nanochat/scripts/tok_train.py
 but uses Zarr instead of torch to serialize token_bytes.py
 """
+import argparse
 import os
 import time
-import argparse
+
 import numpy as np
-from nanojax.tokenizer import RustBPETokenizer
+import zarr
+
 from nanojax.common import get_base_dir
 from nanojax.dataset import parquets_iter_batched
-import zarr 
+from nanojax.tokenizer import RustBPETokenizer
+
 # -----------------------------------------------------------------------------
 # Parse command line arguments
 

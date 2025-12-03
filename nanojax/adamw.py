@@ -1,9 +1,12 @@
-from jax.tree_util import register_dataclass
 from dataclasses import dataclass
 from functools import partial
-from nanojax.gpt import GPT
+
 import jax
 import jax.numpy as jnp
+from jax.tree_util import register_dataclass
+
+from nanojax.gpt import GPT
+
 
 @partial(
     register_dataclass,

@@ -1,20 +1,22 @@
-from nanojax.dataloader import tokenizing_data_loader
-from nanojax.tokenizer import get_token_bytes, get_tokenizer
-from nanojax.gpt import GPT, calculate_loss, GPTConfig,estimate_flops
-from nanojax.adamw import AdamW
-from nanojax.muon import Muon
-from nanojax import configs
-from dataclasses import asdict
+import math
 import operator
+import os
+import sys
 import time
+from dataclasses import asdict
+
 import jax
 import jax.numpy as jnp
-import math
 import trackio
-import sys
-import os
+
+from nanojax import configs
+from nanojax.adamw import AdamW
 from nanojax.checkpointing import save_checkpoint
 from nanojax.common import get_base_dir
+from nanojax.dataloader import tokenizing_data_loader
+from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
+from nanojax.muon import Muon
+from nanojax.tokenizer import get_token_bytes, get_tokenizer
 
 tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()

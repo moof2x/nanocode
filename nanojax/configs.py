@@ -1,4 +1,5 @@
 from nanojax.gpt import GPTConfig
+
 # nanochat's d20 model
 d20_560m = GPTConfig(n_layer=20, n_embed=1280, n_head=10, n_kv_head=10, vocab_size=65536, sequence_len=2048)
 # this is roughly the GPT2-small hyper-params

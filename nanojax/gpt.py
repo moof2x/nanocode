@@ -7,14 +7,16 @@
 # if you're wondering about the variable names here and in nanochat
 # they come from https://github.com/openai/gpt-2/blob/master/src/model.py
 
-from dataclasses import dataclass
 import math
+import operator
+from dataclasses import dataclass
+from functools import partial
+
 import jax
 import jax.numpy as jnp
-from nanojax.common import fold_in_str
 from jax.tree_util import register_dataclass
-from functools import partial
-import operator
+
+from nanojax.common import fold_in_str
 
 # einsum notation:
 #    b: batch

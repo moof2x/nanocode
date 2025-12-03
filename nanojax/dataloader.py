@@ -1,6 +1,9 @@
 from collections import deque
-from nanojax.dataset import parquets_iter_batched
+
 import jax.numpy as jnp
+
+from nanojax.dataset import parquets_iter_batched
+
 
 def tokenizing_data_loader(B, T, split, tokenizer, tokenizer_threads=4, tokenizer_batch_size=128):
     """Stream pretraining text from parquet files, tokenize, yield training batches."""

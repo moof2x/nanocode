@@ -2,13 +2,14 @@
 Taken from karparthy/nanochat/nanochat/ and stripped of the HF tokenizer. 
 """
 
-import os
 import copy
-from functools import lru_cache
+import os
 import pickle
-import rustbpe
+from functools import lru_cache
+
 import tiktoken
 
+import rustbpe
 
 SPECIAL_TOKENS = [
     # every document begins with the Beginning of Sequence (BOS) token that delimits documents
@@ -263,8 +264,9 @@ def get_tokenizer():
     return RustBPETokenizer.from_directory(tokenizer_dir)
 
 def get_token_bytes():
-    from nanojax.common import get_base_dir
     import zarr
+
+    from nanojax.common import get_base_dir
     base_dir = get_base_dir()
     tokenizer_dir = os.path.join(base_dir, "tokenizer")
     token_bytes_path = os.path.join(tokenizer_dir, "token_bytes.zarr")

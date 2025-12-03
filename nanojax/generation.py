@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+
 from nanojax.gpt import GPT
 from nanojax.tokenizer import get_tokenizer
 

@@ -8,14 +8,15 @@ This file contains utilities for:
 Taken from karparthy/nanochat/nanochat/dataset.py
 """
 
-import os
 import argparse
+import os
 import time
-import requests
-import pyarrow.parquet as pq
 from multiprocessing import Pool
 
-from nanojax.common import get_data_dir 
+import pyarrow.parquet as pq
+import requests
+
+from nanojax.common import get_data_dir
 
 # -----------------------------------------------------------------------------
 # The specifics of the current pretraining dataset

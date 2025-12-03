@@ -1,10 +1,13 @@
+from pathlib import Path
+
 import jax
-import zarr
-import numpy as np
 import jax.numpy as jnp
+import numpy as np
+import zarr
+
 from nanojax.gpt import GPT
 from nanojax.muon import Muon
-from pathlib import Path
+
 
 def save_checkpoint(filename: Path, state: GPT | Muon):
     state, _ = jax.tree.flatten_with_path(state)
