@@ -3,7 +3,7 @@ from nanojax.tokenizer import get_token_bytes, get_tokenizer
 from nanojax.gpt import GPT, calculate_loss, GPTConfig,estimate_flops
 from nanojax.adamw import AdamW
 from nanojax.muon import Muon
-from nanojax.configs import d6_23m, d3_4m
+from nanojax import configs
 from dataclasses import asdict
 import operator
 import time
@@ -11,14 +11,21 @@ import jax
 import jax.numpy as jnp
 import math
 import trackio
+import sys
+import os
+from nanojax.checkpointing import save_checkpoint
+from nanojax.common import get_base_dir
 
 tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
+base_dir = get_base_dir()
+checkpoint_dir = os.path.join()
 print(f"Vocab size: {vocab_size}")
-
+command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
+print(command)
 rng = jax.random.key(42)
-config = d3_4m
+config = configs.d3_4m
 lr = 3e-4
 batch_size = 64
 minibatch_size = 64
@@ -45,7 +52,7 @@ print("="*20)
 
 num_flops_per_token = estimate_flops(model)
 print(f"Estimated FLOPs per token: {num_flops_per_token}")
-compute_dtype = jnp.bfloat16
+compute_dtype = jnp.float32
 state = Muon.init(model)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 
@@ -74,7 +81,7 @@ def train_step(idx, targets, model, state):
     return model, state, loss
 
 prompts = [
-    ["The capital of France is "],
+    ["The capital of France is"],
     ["Einstein's special theory of relatively states that energy"],
     ["The closest planet to the Sun is"]
 ]
@@ -110,4 +117,6 @@ while True:
     trackio.log(log_dict)
     if step == num_steps:
         break
+
+
 trackio.finish()
