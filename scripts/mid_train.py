@@ -11,27 +11,35 @@ import trackio
 
 from nanojax import configs
 from nanojax.adamw import AdamW
-from nanojax.checkpointing import save_checkpoint
+from nanojax.checkpointing import save_checkpoint, load_checkpoint
 from nanojax.common import get_base_dir
 from nanojax.dataloader import tokenizing_data_loader
 from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
+from tasks.mixture import TaskMixture
+from tasks.dolly import Dolly
+from tasks.smoltalk import SmolTalk
+from tasks.mmlu import MMLU
+from tasks.hhrlhf import HHRLHF
 
 config = configs.d3_4m
 lr = 3e-4
 batch_size = 64
 minibatch_size = 64
+seed = 42
 grad_accm_steps = batch_size // minibatch_size
 
 tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
 base_dir = get_base_dir()
-checkpoint_dir = base_dir / "base_checkpoints"
+base_checkpoint_dir = base_dir / "base_checkpoints"
+checkpoint_dir = base_dir / "mid_checkpoints"
 print(f"Vocab size: {vocab_size}")
 command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
-rng = jax.random.key(42)
+
+rng = jax.random.key(seed)
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
 
 train_loader = tokenizing_data_loader(batch_size, config.sequence_len, "train", tokenizer)
@@ -58,6 +66,17 @@ compute_dtype = jnp.float32
 state = Muon.init(model)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 
+model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
+state = load_checkpoint(base_checkpoint_dir / "state.zarr", state)
+
+dataset = TaskMixture([
+    SmolTalk("train", seed),
+    Dolly(seed),
+    HHRLHF("train", seed),
+    MMLU("train", seed)
+], seed)
+import pdb
+pdb.set_trace()
 trackio.init(
     project="nanojax",
     config=asdict(config)
@@ -122,3 +141,4 @@ while True:
 save_checkpoint(checkpoint_dir / "model.zarr", model)
 save_checkpoint(checkpoint_dir / "state.zarr", state) 
 trackio.finish()
+

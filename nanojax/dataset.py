@@ -38,7 +38,7 @@ def list_parquet_files(data_dir: Path=None):
     data_dir = DATA_DIR if data_dir is None else data_dir
     return sorted([data_dir / f for f in data_dir.iterdir() if f.suffix == ".parquet"])
 
-def parquets_iter_batched(split, start=0, step=1):
+def parquets_iter_batched(split: str, start: int=0, step: int=1):
     """
     Iterate through the dataset, in batches of underlying row_groups for efficiency.
     - split can be "train" or "val". the last parquet file will be val.
@@ -55,7 +55,7 @@ def parquets_iter_batched(split, start=0, step=1):
             yield texts
 
 # -----------------------------------------------------------------------------
-def download_single_file(index):
+def download_single_file(index: int):
     """ Downloads a single file index, with some backoff """
 
     # Construct the local filepath for this file and skip if it already exists
@@ -113,7 +113,6 @@ if __name__ == "__main__":
     ids_to_download = list(range(num))
     print(f"Downloading {len(ids_to_download)} shards using {args.num_workers} workers...")
     print(f"Target directory: {DATA_DIR}")
-    print()
     with Pool(processes=args.num_workers) as pool:
         results = pool.map(download_single_file, ids_to_download)
 
