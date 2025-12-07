@@ -8,6 +8,7 @@ from dataclasses import asdict
 import jax
 import jax.numpy as jnp
 import trackio
+from collections import deque
 
 from nanojax import configs
 from nanojax.adamw import AdamW
@@ -29,7 +30,7 @@ batch_size = 64
 minibatch_size = 64
 seed = 42
 grad_accm_steps = batch_size // minibatch_size
-
+max_seq_len = config.sequence_len
 tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
@@ -38,13 +39,8 @@ base_checkpoint_dir = base_dir / "base_checkpoints"
 checkpoint_dir = base_dir / "mid_checkpoints"
 print(f"Vocab size: {vocab_size}")
 command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
-
 rng = jax.random.key(seed)
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
-
-train_loader = tokenizing_data_loader(batch_size, config.sequence_len, "train", tokenizer)
-x, y = next(train_loader)
-
 assert vocab_size == config.vocab_size, f"mismatch between tokenizer vocab_size ({vocab_size}) and config vocab_size ({config.vocab_size})"
 model = GPT.init(
     config,
@@ -52,12 +48,6 @@ model = GPT.init(
 )
 print(config)
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
-total_tokens = num_params * 20
-num_steps = math.ceil(total_tokens / config.sequence_len / batch_size) + 1
-expected_loss = 1.8172 + 482.01/(num_params)**0.3478 + 2085.43/(total_tokens)**0.3658
-print(f"{num_params} model parameters")
-print(f"Training on {total_tokens} tokens over {num_steps} steps")
-print(f"Expected final loss: {expected_loss:.4f}")
 print("="*20)
 
 num_flops_per_token = estimate_flops(model)
@@ -69,14 +59,34 @@ grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 state = load_checkpoint(base_checkpoint_dir / "state.zarr", state)
 
+last_step = False
 dataset = TaskMixture([
     SmolTalk("train", seed),
     Dolly(seed),
     HHRLHF("train", seed),
     MMLU("train", seed)
 ], seed)
-import pdb
-pdb.set_trace()
+def dataloader():
+    global last_step
+    ds_size = len(dataset)
+    token_buffer = deque()
+    needed_tokens = batch_size * max_seq_len + 1
+    cursor = 0
+    while True:
+        while len(token_buffer) < needed_tokens:
+            sample = dataset[cursor]
+            ids, _ = tokenizer.render_conversation(sample)
+            token_buffer.extend(ids)
+            cursor += 1
+            if cursor >= ds_size:
+                last_step = True
+        scratch = [token_buffer.popleft() for _ in range(needed_tokens)]
+        inputs = jnp.asarray(scratch[:-1]).reshape(batch_size, max_seq_len)
+        targets = jnp.asarray(scratch[1:]).reshape(batch_size, max_seq_len)
+        yield inputs, targets
+    
+train_loader = dataloader()
+x, y = next(train_loader)
 trackio.init(
     project="nanojax",
     config=asdict(config)
@@ -100,20 +110,27 @@ def train_step(idx, targets, model, state):
     model = jax.tree.map(lambda p, u: p - u, model, updates)
     return model, state, loss
 
+# this time we tokenizer prompts using our chat template
 prompts = [
-    ["The capital of France is"],
-    ["Einstein's special theory of relatively states that energy"],
-    ["The closest planet to the Sun is"]
+    "What is the capital of France?",
+    "Complete the following sentence: 'Einstein's special theory of relatively states that energy'",
+    "What is the closest planet to the Sun?"
 ]
-prompt_idx = [tokenizer.encode(p, prepend=tokenizer.get_bos_token_id()) for p in prompts]
-prompt_idx = [jnp.asarray(p, dtype=jnp.int32) for p in prompt_idx]
-step = 1    
+user_start, user_end = tokenizer.encode_special("<|user_start|>"), tokenizer.encode_special("<|user_end|>")
+assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>"), tokenizer.encode_special("<|assistant_end|>")
+
+prompts = [{"messages": [{"role": "user", "content": p}]} for p in prompts]
+prompt_idx = [tokenizer.render_conversation(p)[0] for p in prompts]
+prompt_idx = [p + [assistant_start] for p in prompt_idx]
+prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
+step = 1
+num_steps = len(dataset)
 while True:
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
     x, y = next(train_loader)
     log_dict = {"loss": float(loss)}
-    print(f"Step {step}/{num_steps} | Loss: {loss:.3f} / {expected_loss:.3f} ")
+    print(f"Step {step}/{num_steps} | Loss: {loss:.3f}")
     if step % 10 == 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
@@ -121,7 +138,6 @@ while True:
         flops_per_sec = num_flops_per_token * x.size / dt
         mfu = 100 * flops_per_sec / 11.15e12# 2080 super FLOPs/sec
         print(f"\tdt: {dt:.3f}s | tkps: {int(x.size // dt)} | mfu: {mfu:.2f}")
-        print(f"\tTokens seen: {x.size * step} / {total_tokens} ({((x.size * step / total_tokens) * 100):.2f}%)")
         print(f"\tEstimated time remaining: {(((num_steps - step) * dt)/60):.1f} min")
         log_dict["tkps"] = int(x.size // dt)
 
@@ -131,11 +147,11 @@ while True:
                 logits = model.forward(idx, compute_dtype)[:, -1, :] # bsv -> bv
                 pred = jnp.argmax(logits, axis=-1, keepdims=True)
                 idx = jnp.concat([idx, pred], axis=1)
-            print(tokenizer.decode(idx[0]))
+            print(tokenizer.visualize_tokenization(idx[0], jnp.ones_like(idx[0])))
 
     step += 1 
     trackio.log(log_dict)
-    if step == num_steps:
+    if last_step:
         break
 
 save_checkpoint(checkpoint_dir / "model.zarr", model)

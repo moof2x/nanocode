@@ -12,7 +12,7 @@ class Dolly:
         self.ds = load_dataset("databricks/databricks-dolly-15k", split="train").shuffle(seed=seed)
         self.ds = self.ds.filter(lambda a: not a["context"])
 
-    def __len__():
+    def __len__(self):
         return len(self.ds)
 
     def __getitem__(self, idx: int):

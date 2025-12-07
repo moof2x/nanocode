@@ -18,5 +18,5 @@ class SmolTalk:
     
     def __getitem__(self, idx: int):
         return {
-            "conversation": self.ds[idx]["messages"]
+            "messages": self.ds[idx]["messages"]
         }

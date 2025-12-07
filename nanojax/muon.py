@@ -1,17 +1,14 @@
+from jax.tree_util import register_dataclass
 from dataclasses import dataclass, replace
 from functools import partial
-
+from nanojax.gpt import GPT, Block
 import jax
 import jax.numpy as jnp
-from jax.tree_util import register_dataclass
-
-from nanojax.gpt import GPT, Block
-
 
 @partial(
     register_dataclass,
-    data_fields=["adamw_mu", "adamw_nu", "mu", "wte_lr", "lm_head_lr", "lr"],
-    meta_fields=["b_1", "b_2", "eps", "adamw_wd", "wd", "ns_steps"]#, "warmup_ratio", "warmdown_ratio", "step", ]
+    data_fields=["adamw_mu", "adamw_nu", "mu"],# "wte_lr", "lm_head_lr", "lr"],
+    meta_fields=["b_1", "b_2", "eps", "adamw_wd", "wd", "ns_steps", "wte_lr", "lm_head_lr", "lr"]#, "warmup_ratio", "warmdown_ratio", "step", ]
 )
 @dataclass
 class Muon:

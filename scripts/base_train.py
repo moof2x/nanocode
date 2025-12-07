@@ -20,8 +20,8 @@ from nanojax.tokenizer import get_token_bytes, get_tokenizer
 
 config = configs.d3_4m
 lr = 3e-4
-batch_size = 64
-minibatch_size = 64
+batch_size = 32
+minibatch_size = 32
 grad_accm_steps = batch_size // minibatch_size
 
 tokenizer = get_tokenizer()
@@ -44,7 +44,7 @@ model = GPT.init(
 )
 print(config)
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
-total_tokens = num_params * 20
+total_tokens = num_params // 1e5#* 20
 num_steps = math.ceil(total_tokens / config.sequence_len / batch_size) + 1
 expected_loss = 1.8172 + 482.01/(num_params)**0.3478 + 2085.43/(total_tokens)**0.3658
 print(f"{num_params} model parameters")
@@ -120,5 +120,6 @@ while True:
         break
 
 save_checkpoint(checkpoint_dir / "model.zarr", model)
-save_checkpoint(checkpoint_dir / "state.zarr", state) 
+save_checkpoint(checkpoint_dir / "state.zarr", state)
+print(f"Model and optimizer state checkpoints saved to {checkpoint_dir}/model.zarr and {checkpoint_dir}/state.zarr.")
 trackio.finish()
