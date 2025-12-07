@@ -27,3 +27,6 @@ module-name = "rustbpe"
 bindings = "pyo3"
 python-source = "."
 manifest-path = "rustbpe/Cargo.toml"
+
+[tool.uv]
+find-links = ["https://storage.googleapis.com/jax-releases/libtpu_releases.html"]

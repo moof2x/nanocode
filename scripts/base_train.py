@@ -18,43 +18,57 @@ from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
 
-config = configs.d3_4m
+config = configs.d3
 lr = 3e-4
 batch_size = 32
 minibatch_size = 32
+seed = 42
+num_steps = -1
+accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
+profile_steps = 50
+sample_steps = 100
+compute_dtype = jnp.float32
+
+config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["config", "compute_dtype"]
+exec(open(os.path.join('nanojax', 'configurator.py')).read()) # overrides from command line 
+user_config = {k: globals()[k] for k in config_keys} 
+command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
+print(command)
+for k, v in user_config.items():
+    print(f"  {k}: {v}")
+
 grad_accm_steps = batch_size // minibatch_size
+assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
 
 tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
+assert vocab_size == config.vocab_size, f"mismatch between tokenizer vocab_size ({vocab_size}) and config vocab_size ({config.vocab_size})"
+
 base_dir = get_base_dir()
 checkpoint_dir = base_dir / "base_checkpoints"
 print(f"Vocab size: {vocab_size}")
-command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
-rng = jax.random.key(42)
-assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
+rng = jax.random.key(seed)
 
 train_loader = tokenizing_data_loader(batch_size, config.sequence_len, "train", tokenizer)
 x, y = next(train_loader)
 
-assert vocab_size == config.vocab_size, f"mismatch between tokenizer vocab_size ({vocab_size}) and config vocab_size ({config.vocab_size})"
 model = GPT.init(
     config,
     rng
 )
-print(config)
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
-total_tokens = num_params // 1e5#* 20
-num_steps = math.ceil(total_tokens / config.sequence_len / batch_size) + 1
-expected_loss = 1.8172 + 482.01/(num_params)**0.3478 + 2085.43/(total_tokens)**0.3658
+if num_steps < 0:
+    total_tokens = num_params * 20
+    num_steps = math.ceil(total_tokens / config.sequence_len / batch_size) + 1
+else:
+    total_tokens = num_steps * config.sequence_len * batch_size
 print(f"{num_params} model parameters")
 print(f"Training on {total_tokens} tokens over {num_steps} steps")
-print(f"Expected final loss: {expected_loss:.4f}")
 print("="*20)
 
 num_flops_per_token = estimate_flops(model)
 print(f"Estimated FLOPs per token: {num_flops_per_token}")
-compute_dtype = jnp.float32
 state = Muon.init(model)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 
@@ -88,25 +102,25 @@ prompts = [
 ]
 prompt_idx = [tokenizer.encode(p, prepend=tokenizer.get_bos_token_id()) for p in prompts]
 prompt_idx = [jnp.asarray(p, dtype=jnp.int32) for p in prompt_idx]
-step = 1    
+step = 1
 while True:
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
     x, y = next(train_loader)
     log_dict = {"loss": float(loss)}
-    print(f"Step {step}/{num_steps} | Loss: {loss:.3f} / {expected_loss:.3f} ")
-    if step % 10 == 0:
+    print(f"Step {step}/{num_steps} | Loss: {loss:.3f}")
+    if step % profile_steps == 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
         dt = time.perf_counter() - d0
         flops_per_sec = num_flops_per_token * x.size / dt
-        mfu = 100 * flops_per_sec / 11.15e12# 2080 super FLOPs/sec
+        mfu = 100 * flops_per_sec  /accelerator_flops
         print(f"\tdt: {dt:.3f}s | tkps: {int(x.size // dt)} | mfu: {mfu:.2f}")
         print(f"\tTokens seen: {x.size * step} / {total_tokens} ({((x.size * step / total_tokens) * 100):.2f}%)")
         print(f"\tEstimated time remaining: {(((num_steps - step) * dt)/60):.1f} min")
         log_dict["tkps"] = int(x.size // dt)
 
-    if step % 50== 0:
+    if step % sample_steps == 0:
         for idx in prompt_idx:
             for i in range(10):
                 logits = model.forward(idx, compute_dtype)[:, -1, :] # bsv -> bv
@@ -121,5 +135,5 @@ while True:
 
 save_checkpoint(checkpoint_dir / "model.zarr", model)
 save_checkpoint(checkpoint_dir / "state.zarr", state)
-print(f"Model and optimizer state checkpoints saved to {checkpoint_dir}/model.zarr and {checkpoint_dir}/state.zarr.")
+print(f"Model (model.zarr) and optimizer state (state.zarr) checkpoints saved to {checkpoint_dir}.")
 trackio.finish()

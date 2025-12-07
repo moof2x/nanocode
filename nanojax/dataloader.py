@@ -1,7 +1,7 @@
 from collections import deque
 
 import jax.numpy as jnp
-
+import numpy as np
 from nanojax.dataset import parquets_iter_batched
 
 
@@ -32,11 +32,11 @@ def tokenizing_data_loader(B, T, split, tokenizer, tokenizer_threads=4, tokenize
                 token_buffer.extend(tokens)
             batch_index += 1
         # Move tokens from the deque into the scratch buffer
-        tokens = [token_buffer.popleft() for _ in range(needed_tokens)]
-        # Create the inputs/targets and yield
-        inputs = jnp.asarray(tokens[:-1], dtype=jnp.int32).reshape(B, T)
-        # JAX does not natively support int64 (see JAX gotcha), but this isn't really an issue
+        # note: JAX does not natively support int64 (see JAX gotchas), but this isn't really an issue
         # as torch's cross entropy requires int64 targets for only historical(?) reasons
-        targets = jnp.asarray(tokens[1:], dtype=jnp.int32).reshape(B, T)
+        tokens = np.array([token_buffer.popleft() for _ in range(needed_tokens)], dtype=np.int32)
+        # Create the inputs/targets and yield
+        inputs = jnp.asarray(tokens[:-1]).reshape(B, T)
+        targets = jnp.asarray(tokens[1:]).reshape(B, T)
         yield inputs, targets
 
