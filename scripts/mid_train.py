@@ -98,6 +98,7 @@ def dataloader():
             cursor += 1
             if cursor >= ds_size:
                 last_step = True
+                cursor -= ds_size # we may need to wrap around to fulfill the remaining needed_tokens for the last step
         scratch = np.array([token_buffer.popleft() for _ in range(needed_tokens)], dtype=np.int32)
         inputs = jnp.asarray(scratch[:-1]).reshape(batch_size, max_seq_len)
         targets = jnp.asarray(scratch[1:]).reshape(batch_size, max_seq_len)
@@ -123,8 +124,9 @@ def train_step(idx, targets, model, state):
     (loss, grads), _ = jax.lax.scan(inner_step, (0.0, jax.tree.map(jnp.zeros_like, model)), jnp.arange(grad_accm_steps))
     grads = jax.tree.map(lambda g: g / grad_accm_steps, grads)
     loss /= grad_accm_steps
-    
-    updates, state = state.update(model, grads, lr, step)
+
+    # step is accessed globally as it would trigger recompiles if passed to our JIT-ed step
+    updates, state = state.update(model, grads, lr, step + 1)
     model = jax.tree.map(lambda p, u: p - u, model, updates)
     return model, state, loss
 
@@ -141,13 +143,18 @@ prompts = [{"messages": [{"role": "user", "content": p}]} for p in prompts]
 prompt_idx = [tokenizer.render_conversation(p)[0] for p in prompts]
 prompt_idx = [p + [assistant_start] for p in prompt_idx]
 prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
-step = 1
+step = 0
 while True:
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
     x, y = next(train_loader)
     log_dict = {"loss": float(loss)}
-    print(f"Step {step}/{num_steps} | Loss: {loss:.3f}")
+    if num_steps:
+        pct_done = (step / num_steps) * 100
+    else:
+        pct_done = (cursor / len(dataset)) * 100
+        
+    print(f"Step {step} ({pct_done:.2f}%)| Loss: {loss:.3f}")
     if step % profile_steps== 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
