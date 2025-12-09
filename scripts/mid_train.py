@@ -3,37 +3,39 @@ import operator
 import os
 import sys
 import time
+from collections import deque
 from dataclasses import asdict
 
 import jax
 import jax.numpy as jnp
-import trackio
-from collections import deque
 import numpy as np
+import trackio
 
 from nanojax import configs
 from nanojax.adamw import AdamW
-from nanojax.checkpointing import save_checkpoint, load_checkpoint
+from nanojax.checkpointing import load_checkpoint, save_checkpoint
 from nanojax.common import get_base_dir
 from nanojax.dataloader import tokenizing_data_loader
+from nanojax.eval import evaluate_bpb
 from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
-from tasks.mixture import TaskMixture
 from tasks.dolly import Dolly
-from tasks.smoltalk import SmolTalk
-from tasks.mmlu import MMLU
 from tasks.hhrlhf import HHRLHF
+from tasks.mixture import TaskMixture
+from tasks.mmlu import MMLU
+from tasks.smoltalk import SmolTalk
 
 config = configs.d3
 lr = 3e-4
-batch_size = 64
-minibatch_size = 64
+batch_size = 32
+minibatch_size = 32
 seed = 42
 num_steps = -1
-accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
-profile_steps = 50
-sample_steps = 100
+accelerator_flops = 11.15e12 # 2080 SUPER fp32 FLOPs/sec
+profile_every = 100
+sample_every = 50
+eval_every = 50
 compute_dtype = jnp.float32
 
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["config", "compute_dtype"]
@@ -46,8 +48,9 @@ for k, v in user_config.items():
 
 grad_accm_steps = batch_size // minibatch_size
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
-
 max_seq_len = config.sequence_len
+eval_tokens = batch_size * max_seq_len* 20 # magic number from nanochat
+
 tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
@@ -105,6 +108,7 @@ def dataloader():
         yield inputs, targets
     
 train_loader = dataloader()
+get_val_dataloader = lambda: tokenizing_data_loader(batch_size, max_seq_len, "val", tokenizer)
 x, y = next(train_loader)
 trackio.init(
     project="nanojax",
@@ -134,7 +138,7 @@ def train_step(idx, targets, model, state):
 prompts = [
     "What is the capital of France?",
     "Complete the following sentence: 'Einstein's special theory of relatively states that energy'",
-    "What is the closest planet to the Sun?"
+    "What is the closest planet to the Sun?",
 ]
 user_start, user_end = tokenizer.encode_special("<|user_start|>"), tokenizer.encode_special("<|user_end|>")
 assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>"), tokenizer.encode_special("<|assistant_end|>")
@@ -155,8 +159,7 @@ while True:
         pct_done = (cursor / len(dataset)) * 100
         
     print(f"Step {step} ({pct_done:.2f}%)| Loss: {loss:.3f}")
-    if step % profile_steps== 0:
-        # log profiling every now and then
+    if step % profile_every== 0:
         jax.block_until_ready(loss)
         dt = time.perf_counter() - d0
         flops_per_sec = num_flops_per_token * x.size / dt
@@ -165,14 +168,20 @@ while True:
         print(f"\tEstimated time remaining: {(((num_steps - step) * dt)/60):.1f} min")
         log_dict["tkps"] = int(x.size // dt)
 
-    if step % sample_steps == 0:
+    if step % sample_every == 0:
         for idx in prompt_idx:
-            for i in range(10):
+            for i in range(16):
                 logits = model.forward(idx, compute_dtype)[:, -1, :] # bsv -> bv
                 pred = jnp.argmax(logits, axis=-1, keepdims=True)
                 idx = jnp.concat([idx, pred], axis=1)
             print(tokenizer.decode(idx[0]))
 
+    if step % eval_every == 0:
+        d0 = time.perf_counter()
+        eval_steps = eval_tokens // (minibatch_size * max_seq_len) 
+        val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype)
+        print(f"bpb: {val_bpb:.2f} | dt: {(time.perf_counter() - d0):.2f}s")
+        
     step += 1 
     trackio.log(log_dict)
     if (num_steps and step == num_steps) or last_step:

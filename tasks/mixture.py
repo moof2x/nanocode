@@ -1,5 +1,6 @@
 import random
 
+
 class TaskMixture:
     def __init__(self, tasks, seed: int, **kwargs):
         super().__init__(**kwargs)

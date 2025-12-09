@@ -5,6 +5,7 @@ smol-SmolTalk from HuggingFace. I've stripped the validation logic from nanochat
 
 from datasets import load_dataset
 
+
 class SmolTalk:
     """ smol-smoltalk dataset. train is 460K rows, test is 24K rows. """
 

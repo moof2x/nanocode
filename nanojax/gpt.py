@@ -215,12 +215,13 @@ def estimate_flops(model: GPT):
     return num_flops_per_token
 
 
-def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT, dtype: jnp.dtype) -> jax.Array:
+def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT, dtype: jnp.dtype, reduce: bool=True) -> jax.Array:
     # TODO try logit softcapping
     logits = model.forward(idx, dtype)
     # cross entropy loss using logsumexp
     logsumexp = jax.nn.logsumexp(logits, axis=-1)
     # TODO add support for ignore index
     loss = -jnp.take_along_axis(logits, targets[:, :, None], axis=-1).squeeze(-1) + logsumexp
-    loss = loss.mean()
+    if reduce:
+        loss = loss.mean()
     return loss

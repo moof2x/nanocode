@@ -14,6 +14,7 @@ from nanojax.adamw import AdamW
 from nanojax.checkpointing import save_checkpoint
 from nanojax.common import get_base_dir
 from nanojax.dataloader import tokenizing_data_loader
+from nanojax.eval import evaluate_bpb
 from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
@@ -25,8 +26,9 @@ minibatch_size = 32
 seed = 42
 num_steps = -1
 accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
-profile_steps = 50
-sample_steps = 100
+profile_every = 100
+sample_every = 50
+eval_every = 50
 compute_dtype = jnp.float32
 
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["config", "compute_dtype"]
@@ -39,6 +41,8 @@ for k, v in user_config.items():
 
 grad_accm_steps = batch_size // minibatch_size
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
+max_seq_len = config.sequence_len
+eval_tokens = batch_size * max_seq_len* 20 # magic number from nanochat
 
 tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
@@ -50,7 +54,8 @@ checkpoint_dir = base_dir / "base_checkpoints"
 print(f"Vocab size: {vocab_size}")
 rng = jax.random.key(seed)
 
-train_loader = tokenizing_data_loader(batch_size, config.sequence_len, "train", tokenizer)
+train_loader = tokenizing_data_loader(batch_size, max_seq_len, "train", tokenizer)
+get_val_dataloader = lambda: tokenizing_data_loader(batch_size, max_seq_len, "val", tokenizer)
 x, y = next(train_loader)
 
 model = GPT.init(
@@ -60,9 +65,9 @@ model = GPT.init(
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
 if num_steps < 0:
     total_tokens = num_params * 20
-    num_steps = math.ceil(total_tokens / config.sequence_len / batch_size) + 1
+    num_steps = math.ceil(total_tokens / max_seq_len / batch_size) + 1
 else:
-    total_tokens = num_steps * config.sequence_len * batch_size
+    total_tokens = num_steps * max_seq_len * batch_size
 print(f"{num_params} model parameters")
 print(f"Training on {total_tokens} tokens over {num_steps} steps")
 print("="*20)
@@ -96,20 +101,24 @@ def train_step(idx, targets, model, state):
     return model, state, loss
 
 prompts = [
-    ["The capital of France is"],
-    ["Einstein's special theory of relatively states that energy"],
-    ["The closest planet to the Sun is"]
+    "The capital of France is",
+    "The chemical symbol of gold is",
+    "The closest planet to the Sun is",
+    "The opposite of hot is",
+    "The second-last day of the week is"
 ]
 prompt_idx = [tokenizer.encode(p, prepend=tokenizer.get_bos_token_id()) for p in prompts]
-prompt_idx = [jnp.asarray(p, dtype=jnp.int32) for p in prompt_idx]
+prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
 step = 1
+
+eval_forward = jax.jit(model.forward, static_argnums=1)
 while True:
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
     x, y = next(train_loader)
     log_dict = {"loss": float(loss)}
     print(f"Step {step}/{num_steps} | Loss: {loss:.3f}")
-    if step % profile_steps == 0:
+    if step % profile_every == 0:
         # log profiling every now and then
         jax.block_until_ready(loss)
         dt = time.perf_counter() - d0
@@ -120,14 +129,19 @@ while True:
         print(f"\tEstimated time remaining: {(((num_steps - step) * dt)/60):.1f} min")
         log_dict["tkps"] = int(x.size // dt)
 
-    if step % sample_steps == 0:
+    if step % sample_every == 0:
         for idx in prompt_idx:
-            for i in range(10):
-                logits = model.forward(idx, compute_dtype)[:, -1, :] # bsv -> bv
+            for i in range(16):
+                logits = eval_forward(idx, compute_dtype)[:, -1, :] # bsv -> bv
                 pred = jnp.argmax(logits, axis=-1, keepdims=True)
                 idx = jnp.concat([idx, pred], axis=1)
             print(tokenizer.decode(idx[0]))
 
+    if step % eval_every == 0:
+        d0 = time.perf_counter()
+        eval_steps = eval_tokens // (minibatch_size * max_seq_len) 
+        val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype)
+        print(f"bpb: {val_bpb:.2f} | dt: {(time.perf_counter() - d0):.2f}s")
     step += 1 
     trackio.log(log_dict)
     if step == num_steps:

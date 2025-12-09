@@ -2,6 +2,7 @@ from collections import deque
 
 import jax.numpy as jnp
 import numpy as np
+
 from nanojax.dataset import parquets_iter_batched
 
 
