@@ -131,7 +131,7 @@ def train_step(idx, targets, model, state):
 
     # step is accessed globally as it would trigger recompiles if passed to our JIT-ed step
     updates, state = state.update(model, grads, lr, step + 1)
-    model = jax.tree.map(lambda p, u: p - u, model, updates)
+    model = jax.tree.map(jnp.subtract, model, updates)
     return model, state, loss
 
 # this time we tokenizer prompts using our chat template

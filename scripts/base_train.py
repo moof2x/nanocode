@@ -20,16 +20,23 @@ from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
 
 config = configs.d3
+### optimization hparams
 lr = 3e-4
 batch_size = 32
 minibatch_size = 32
-seed = 42
 num_steps = -1
+warmup_ratio = 0.0
+warmdown_ratio = 0.2
+compute_dtype = jnp.float32
+
+### misc
+seed = 42
 accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
+
+### training loop control
 profile_every = 100
 sample_every = 50
 eval_every = 50
-compute_dtype = jnp.float32
 
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["config", "compute_dtype"]
 exec(open(os.path.join('nanojax', 'configurator.py')).read()) # overrides from command line 
@@ -82,6 +89,18 @@ trackio.init(
     config=asdict(config)
 )
 
+def get_lr_multiplier(step):
+    warmup_iters = round(warmup_ratio * num_steps)
+    warmdown_iters = round(warmdown_ratio * num_steps)
+    if step < warmup_iters:
+        return (step + 1) / warmup_iters
+    elif step <= num_steps - warmdown_iters:
+        return 1.0
+    else:
+        progress = (num_steps - step) / warmdown_iters
+        return progress * 1.0 + (1 - progress) * final_lr_frac
+
+    
 @jax.jit
 def train_step(idx, targets, model, state):
     def inner_step(carry, j):
@@ -96,8 +115,8 @@ def train_step(idx, targets, model, state):
     grads = jax.tree.map(lambda g: g / grad_accm_steps, grads)
     loss /= grad_accm_steps
     
-    updates, state = state.update(model, grads, lr, step)
-    model = jax.tree.map(lambda p, u: p - u, model, updates)
+    updates, state = state.update(model, grads, lr_multiplier, step + 1)
+    model = jax.tree.map(jnp.subtract, model, updates)
     return model, state, loss
 
 prompts = [
@@ -109,10 +128,11 @@ prompts = [
 ]
 prompt_idx = [tokenizer.encode(p, prepend=tokenizer.get_bos_token_id()) for p in prompts]
 prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
-step = 1
-
 eval_forward = jax.jit(model.forward, static_argnums=1)
+
+step = 0
 while True:
+    lr_multiplier = get_lr_multiplier(step)
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
     x, y = next(train_loader)

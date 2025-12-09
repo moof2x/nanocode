@@ -104,31 +104,36 @@ class GPT:
         # random state must be explicitly managed in JAX by "splitting"
         # random keys. fold_in_str does this by splitting the base key
         # based on the hash of a given string - in this case the weight name.
-        std = 0.02
-        wte = jax.random.normal(fold_in_str(rng, "wte"), (cfg.vocab_size, cfg.n_embed)) * std
+        # mean 0, std 1 initialization for embedding layer
+        def init_linear(rng, shape):
+            # fan-in-fan-out initialization https://arxiv.org/pdf/2310.17813
+            fan_in, fan_out = shape
+            std = 1.0 / math.sqrt(fan_in) * min(1.0, math.sqrt(fan_out / fan_in))
+            return jax.random.normal(rng, shape) * std
+
+        wte = jax.random.normal(fold_in_str(rng, "wte"), (cfg.vocab_size, cfg.n_embed)) 
         h = []
+        head_dim = cfg.n_embed // cfg.n_head
         for i in range(cfg.n_layer):
-            # regular mean-zero, std 0.02 weight initialisation
-            # TODO - why does nanochat do some funky initialiation?
-            head_dim = cfg.n_embed // cfg.n_head
-            resid_std = std / math.sqrt(2 * cfg.n_layer)
-    
+            # modded-nanogpt suggestion: zero out c_proj in attn and mlp layers
             attn = Attention(
-                c_q=jax.random.normal(fold_in_str(rng, f"{i}_c_q"), (cfg.n_embed, cfg.n_head * head_dim)) * std,
-                c_k=jax.random.normal(fold_in_str(rng, f"{i}_k"), (cfg.n_embed, cfg.n_kv_head * head_dim)) * std,
-                c_v=jax.random.normal(fold_in_str(rng, f"{i}_v"), (cfg.n_embed, cfg.n_kv_head * head_dim)) * std,
-                c_proj=jax.random.normal(fold_in_str(rng, f"{i}_o"), (cfg.n_embed, cfg.n_embed)) * resid_std,
+                c_q=init_linear(fold_in_str(rng, f"{i}_c_q"), (cfg.n_embed, cfg.n_head * head_dim)),
+                c_k=init_linear(fold_in_str(rng, f"{i}_k"), (cfg.n_embed, cfg.n_kv_head * head_dim)),
+                c_v=init_linear(fold_in_str(rng, f"{i}_v"), (cfg.n_embed, cfg.n_kv_head * head_dim)),
+                # c_proj=init_linear(fold_in_str(rng, f"{i}_o"), (cfg.n_embed, cfg.n_embed)) * resid_std,
+                c_proj = jnp.zeros((cfg.n_embed, cfg.n_embed))
             )
     
             mlp = MLP(
-                c_fc=jax.random.normal(fold_in_str(rng, f"{i}_c_fc"), (cfg.n_embed, 4 * cfg.n_embed)) * std,
-                c_proj=jax.random.normal(fold_in_str(rng, f"{i}_c_proj"), (4 * cfg.n_embed, cfg.n_embed)) * resid_std,
+                c_fc=init_linear(fold_in_str(rng, f"{i}_c_fc"), (cfg.n_embed, 4 * cfg.n_embed)),
+                # c_proj=init_linear(fold_in_str(rng, f"{i}_c_proj"), (4 * cfg.n_embed, cfg.n_embed)) * resid_std,
+                c_proj=jnp.zeros((4 * cfg.n_embed, cfg.n_embed))
             )
             h.append(Block(attn=attn, mlp=mlp))
 
-        # TODO - why does nanochat zero out classifier weights and c_proj in mlps?
-        # ANSWER: see modded-nanogpt
-        lm_head = jax.random.normal(fold_in_str(rng, "lm_head"), (cfg.n_embed, cfg.vocab_size)) * std
+        # modded-nanogpt suggestion: zero out classifier weights
+        # lm_head = jax.random.normal(fold_in_str(rng, "lm_head"), (cfg.n_embed, cfg.vocab_size)) * std
+        lm_head = jnp.zeros((cfg.n_embed, cfg.vocab_size))
         return GPT(
             wte=wte,
             h=h,
@@ -198,13 +203,16 @@ class GPT:
             ### mlp
             mlp_in = rms_norm(x)
             mlp_out = jnp.einsum("bse,eE->bsE", mlp_in, mlp.c_fc.astype(compute_dtype))
-            mlp_out = jax.nn.gelu(mlp_out) # TODO why does nanochat use relu^2? ANSWER: see modded-nanogpt
+            mlp_out = jax.lax.square(jax.nn.relu(mlp_out)) # modded-nanogpt introduced the use of relu^2
             mlp_out = jnp.einsum("bsE,Ee->bse", mlp_out, mlp.c_proj.astype(compute_dtype))
             x = x + mlp_out
             
         x = rms_norm(x)
         # note: we calculate logits and CE in fp32, so no weight downcasting here
+        # also perform logit softcapping
+        softcap = 15
         logits = jnp.einsum("bse,ev->bsv", x.astype(jnp.float32), self.lm_head)
+        logits = softcap * jax.nn.tanh(logits / softcap)
         return logits
 
 def estimate_flops(model: GPT):
@@ -216,7 +224,6 @@ def estimate_flops(model: GPT):
 
 
 def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT, dtype: jnp.dtype, reduce: bool=True) -> jax.Array:
-    # TODO try logit softcapping
     logits = model.forward(idx, dtype)
     # cross entropy loss using logsumexp
     logsumexp = jax.nn.logsumexp(logits, axis=-1)
