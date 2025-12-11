@@ -27,16 +27,23 @@ from tasks.mmlu import MMLU
 from tasks.smoltalk import SmolTalk
 
 config = configs.d3
+### optimization hparams
 lr = 3e-4
 batch_size = 32
 minibatch_size = 32
-seed = 42
 num_steps = -1
-accelerator_flops = 11.15e12 # 2080 SUPER fp32 FLOPs/sec
-profile_every = 100
+warmup_ratio = 0.0
+warmdown_ratio = 0.2
+final_lr_frac = 0.0
+compute_dtype = jnp.float32
+
+### misc
+seed = 42
+accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
+
+### training loop control
 sample_every = 50
 eval_every = 50
-compute_dtype = jnp.float32
 
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["config", "compute_dtype"]
 exec(open(os.path.join('nanojax', 'configurator.py')).read()) # overrides from command line 
@@ -84,15 +91,12 @@ dataset = TaskMixture([
     MMLU("train", seed)
 ], seed)
 
-if num_steps < 0:
-    num_steps = len(dataset)
-
+cursor = 0
 def dataloader():
-    global last_step
+    global last_step, cursor
     ds_size = len(dataset)
     token_buffer = deque()
     needed_tokens = batch_size * max_seq_len + 1
-    cursor = 0
     while True:
         while len(token_buffer) < needed_tokens:
             sample = dataset[cursor]
@@ -136,9 +140,11 @@ def train_step(idx, targets, model, state):
 
 # this time we tokenizer prompts using our chat template
 prompts = [
-    "What is the capital of France?",
-    "Complete the following sentence: 'Einstein's special theory of relatively states that energy'",
-    "What is the closest planet to the Sun?",
+    "The capital of France is",
+    "The chemical symbol of gold is",
+    "The closest planet to the Sun is",
+    "The opposite of hot is",
+    "The second-last day of the week is"
 ]
 user_start, user_end = tokenizer.encode_special("<|user_start|>"), tokenizer.encode_special("<|user_end|>")
 assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>"), tokenizer.encode_special("<|assistant_end|>")
@@ -148,27 +154,28 @@ prompt_idx = [tokenizer.render_conversation(p)[0] for p in prompts]
 prompt_idx = [p + [assistant_start] for p in prompt_idx]
 prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
 step = 0
+progress = 0.0
 while True:
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
+    loss = float(loss) # synchronize
+    dt = time.perf_counter() - d0
     x, y = next(train_loader)
-    log_dict = {"loss": float(loss)}
-    if num_steps:
-        pct_done = (step / num_steps) * 100
+    
+    if num_steps > 0:
+        approx_progress = step / num_steps
     else:
-        pct_done = (cursor / len(dataset)) * 100
-        
-    print(f"Step {step} ({pct_done:.2f}%)| Loss: {loss:.3f}")
-    if step % profile_every== 0:
-        jax.block_until_ready(loss)
-        dt = time.perf_counter() - d0
-        flops_per_sec = num_flops_per_token * x.size / dt
-        mfu = 100 * flops_per_sec / accelerator_flops
-        print(f"\tdt: {dt:.3f}s | tkps: {int(x.size // dt)} | mfu: {mfu:.2f}")
-        print(f"\tEstimated time remaining: {(((num_steps - step) * dt)/60):.1f} min")
-        log_dict["tkps"] = int(x.size // dt)
-
-    if step % sample_every == 0:
+        approx_progress = cursor / len(dataset)
+    progress = max(progress, approx_progress)
+    pct_done = progress * 100
+    
+    flops_per_sec = num_flops_per_token * x.size / dt
+    mfu = 100 * flops_per_sec / accelerator_flops
+    tkps = int(x.size // dt)
+    print(f"Step: {step} ({pct_done:.2f}%)| Loss: {loss:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f}")
+    
+    log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu}
+    if (step % sample_every == 0) or last_step:
         for idx in prompt_idx:
             for i in range(16):
                 logits = model.forward(idx, compute_dtype)[:, -1, :] # bsv -> bv
@@ -176,15 +183,16 @@ while True:
                 idx = jnp.concat([idx, pred], axis=1)
             print(tokenizer.decode(idx[0]))
 
-    if step % eval_every == 0:
+    if (step % eval_every == 0) or last_step:
         d0 = time.perf_counter()
         eval_steps = eval_tokens // (minibatch_size * max_seq_len) 
         val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype)
-        print(f"bpb: {val_bpb:.2f} | dt: {(time.perf_counter() - d0):.2f}s")
-        
+        print(f"\tbpb: {val_bpb:.4f} | dt: {(time.perf_counter() - d0):.2f}s")
+        log_dict["val/bpb"] = val_bpb
+
     step += 1 
     trackio.log(log_dict)
-    if (num_steps and step == num_steps) or last_step:
+    if (num_steps > 0 and step >= num_steps) or last_step:
         break
 
 save_checkpoint(checkpoint_dir / "model.zarr", model)

@@ -52,7 +52,7 @@ def apply_rope(x: jax.Array, cos: jax.Array, sin: jax.Array) -> jax.Array:
 class GPTConfig:
     # default GPT2-117M params 
     sequence_len: int = 1024
-    vocab_size: int = 50304 # originally 50257, nanochat bumps it to the nearest multiple of 64. this should be inferred from the tokenizer though
+    vocab_size: int = 50304 # originally 50257, nanochat bumps it to the nearest multiple of 64.
     n_layer: int = 12
     n_head: int = 12
     n_kv_head: int = 12
@@ -104,13 +104,13 @@ class GPT:
         # random state must be explicitly managed in JAX by "splitting"
         # random keys. fold_in_str does this by splitting the base key
         # based on the hash of a given string - in this case the weight name.
-        # mean 0, std 1 initialization for embedding layer
         def init_linear(rng, shape):
             # fan-in-fan-out initialization https://arxiv.org/pdf/2310.17813
             fan_in, fan_out = shape
             std = 1.0 / math.sqrt(fan_in) * min(1.0, math.sqrt(fan_out / fan_in))
             return jax.random.normal(rng, shape) * std
 
+        # mean 0, std 1 initialization for embedding layer
         wte = jax.random.normal(fold_in_str(rng, "wte"), (cfg.vocab_size, cfg.n_embed)) 
         h = []
         head_dim = cfg.n_embed // cfg.n_head
@@ -120,19 +120,16 @@ class GPT:
                 c_q=init_linear(fold_in_str(rng, f"{i}_c_q"), (cfg.n_embed, cfg.n_head * head_dim)),
                 c_k=init_linear(fold_in_str(rng, f"{i}_k"), (cfg.n_embed, cfg.n_kv_head * head_dim)),
                 c_v=init_linear(fold_in_str(rng, f"{i}_v"), (cfg.n_embed, cfg.n_kv_head * head_dim)),
-                # c_proj=init_linear(fold_in_str(rng, f"{i}_o"), (cfg.n_embed, cfg.n_embed)) * resid_std,
                 c_proj = jnp.zeros((cfg.n_embed, cfg.n_embed))
             )
     
             mlp = MLP(
                 c_fc=init_linear(fold_in_str(rng, f"{i}_c_fc"), (cfg.n_embed, 4 * cfg.n_embed)),
-                # c_proj=init_linear(fold_in_str(rng, f"{i}_c_proj"), (4 * cfg.n_embed, cfg.n_embed)) * resid_std,
                 c_proj=jnp.zeros((4 * cfg.n_embed, cfg.n_embed))
             )
             h.append(Block(attn=attn, mlp=mlp))
 
         # modded-nanogpt suggestion: zero out classifier weights
-        # lm_head = jax.random.normal(fold_in_str(rng, "lm_head"), (cfg.n_embed, cfg.vocab_size)) * std
         lm_head = jnp.zeros((cfg.n_embed, cfg.vocab_size))
         return GPT(
             wte=wte,
@@ -189,11 +186,6 @@ class GPT:
 
             # scaled dot product attention
             attn_out = jax.nn.dot_product_attention(q, k, v, is_causal=True)
-            # scores = jnp.einsum("bsqh,bSkh->bsSh", q, k)
-            # scores =  jnp.where(mask, scores, -1e10) / jnp.sqrt(h)
-            # # we typically softmax in fp32 
-            # probs = jax.nn.softmax(scores.astype(jnp.float32), axis=-1).astype(compute_dtype)
-            # attn_out = jnp.einsum("bsSh,bskh->bskh", probs, v).astype(compute_dtype)
             attn_out = attn_out.reshape(b, s, cfg.n_embed)
             attn_out = jnp.einsum("bse,eE->bsE", attn_out, attn.c_proj.astype(compute_dtype))
 
@@ -208,12 +200,12 @@ class GPT:
             x = x + mlp_out
             
         x = rms_norm(x)
-        # note: we calculate logits and CE in fp32, so no weight downcasting here
-        # also perform logit softcapping
+        # perform logit softcapping
         softcap = 15
-        logits = jnp.einsum("bse,ev->bsv", x.astype(jnp.float32), self.lm_head)
+        logits = jnp.einsum("bse,ev->bsv", x, self.lm_head.astype(compute_dtype))
+        # note: we CE in fp32, so no mixed precision here
         logits = softcap * jax.nn.tanh(logits / softcap)
-        return logits
+        return logits.astype(jnp.float32)
 
 def estimate_flops(model: GPT):
     num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))

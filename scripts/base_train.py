@@ -18,23 +18,30 @@ from nanojax.eval import evaluate_bpb
 from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
+# jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
 
 config = configs.d3
 ### optimization hparams
-lr = 3e-4
 batch_size = 32
 minibatch_size = 32
 num_steps = -1
+
+# learning rates/scheduling
 warmup_ratio = 0.0
 warmdown_ratio = 0.2
-compute_dtype = jnp.float32
+final_lr_frac = 0.0
+eps = 1e-10
+wd = 0.0
+wte_lr = 0.2
+lm_head_lr = 0.004
+lr = 0.02
 
 ### misc
 seed = 42
 accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
+compute_dtype = jnp.float32
 
 ### training loop control
-profile_every = 100
 sample_every = 50
 eval_every = 50
 
@@ -62,7 +69,7 @@ print(f"Vocab size: {vocab_size}")
 rng = jax.random.key(seed)
 
 train_loader = tokenizing_data_loader(batch_size, max_seq_len, "train", tokenizer)
-get_val_dataloader = lambda: tokenizing_data_loader(batch_size, max_seq_len, "val", tokenizer)
+get_val_dataloader = lambda: tokenizing_data_loader(minibatch_size, max_seq_len, "val", tokenizer)
 x, y = next(train_loader)
 
 model = GPT.init(
@@ -81,7 +88,8 @@ print("="*20)
 
 num_flops_per_token = estimate_flops(model)
 print(f"Estimated FLOPs per token: {num_flops_per_token}")
-state = Muon.init(model)
+
+state = Muon.init(model, eps=eps,  wd=wd, wte_lr=wte_lr, lm_head_lr=lm_head_lr, lr=lr)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 
 trackio.init(
@@ -101,7 +109,7 @@ def get_lr_multiplier(step):
         return progress * 1.0 + (1 - progress) * final_lr_frac
 
     
-@jax.jit
+@jax.jit(donate_argnums=(2, 3))
 def train_step(idx, targets, model, state):
     def inner_step(carry, j):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
@@ -128,40 +136,43 @@ prompts = [
 ]
 prompt_idx = [tokenizer.encode(p, prepend=tokenizer.get_bos_token_id()) for p in prompts]
 prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
-eval_forward = jax.jit(model.forward, static_argnums=1)
 
 step = 0
 while True:
+    last_step = (step + 1) == num_steps
     lr_multiplier = get_lr_multiplier(step)
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
+    loss = float(loss) # synchronise
+    dt = time.perf_counter() - d0
     x, y = next(train_loader)
-    log_dict = {"loss": float(loss)}
-    print(f"Step {step}/{num_steps} | Loss: {loss:.3f}")
-    if step % profile_every == 0:
-        # log profiling every now and then
-        jax.block_until_ready(loss)
-        dt = time.perf_counter() - d0
-        flops_per_sec = num_flops_per_token * x.size / dt
-        mfu = 100 * flops_per_sec  /accelerator_flops
-        print(f"\tdt: {dt:.3f}s | tkps: {int(x.size // dt)} | mfu: {mfu:.2f}")
-        print(f"\tTokens seen: {x.size * step} / {total_tokens} ({((x.size * step / total_tokens) * 100):.2f}%)")
-        print(f"\tEstimated time remaining: {(((num_steps - step) * dt)/60):.1f} min")
-        log_dict["tkps"] = int(x.size // dt)
 
-    if step % sample_every == 0:
+    # profiling info
+    flops_per_sec = num_flops_per_token * x.size / dt
+    mfu = 100 * flops_per_sec / accelerator_flops
+    tkps = int(x.size // dt)
+    eta = ((num_steps - step) * dt) / 60
+    memory_stats = jax.devices()[0].memory_stats()
+    used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
+    
+    print(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | | tkps: {tkps} | mfu: {mfu:.2f} | min ETA: {eta:.1f} min | memory: {used:.1f}/{available:.1f}GB")
+    log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu}
+    
+    if (step % sample_every == 0) or last_step:
         for idx in prompt_idx:
             for i in range(16):
-                logits = eval_forward(idx, compute_dtype)[:, -1, :] # bsv -> bv
+                logits = model.forward(idx, compute_dtype)[:, -1, :] # bsv -> bv
                 pred = jnp.argmax(logits, axis=-1, keepdims=True)
                 idx = jnp.concat([idx, pred], axis=1)
-            print(tokenizer.decode(idx[0]))
+            print("\t" + tokenizer.decode(idx[0]))
 
-    if step % eval_every == 0:
+    if (step % eval_every == 0) or last_step:
         d0 = time.perf_counter()
         eval_steps = eval_tokens // (minibatch_size * max_seq_len) 
         val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype)
-        print(f"bpb: {val_bpb:.2f} | dt: {(time.perf_counter() - d0):.2f}s")
+        print(f"\tbpb: {val_bpb:.4f} | dt: {(time.perf_counter() - d0):.2f}s")
+        log_dict["val/bpb"] = val_bpb
+
     step += 1 
     trackio.log(log_dict)
     if step == num_steps:
