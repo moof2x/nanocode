@@ -151,13 +151,22 @@ class GPT:
         # with the benefit of finer-grained control over mixed precision.
         
         # project our tokens into embedding space
-        x = self.wte[idx].astype(compute_dtype) # jnp.einsum("bs,ve->bse", idx, self.wte.astype(compute_dtype))
-        # create our causal mask ( not needed for jax sdpa)
-        #mask = jnp.tril(jnp.ones((s, s), dtype=jnp.bool))[None, :, :, None]
+        x = self.wte[idx].astype(compute_dtype)
+        x = rms_norm(x)
+
+        h = self.cfg.n_embed // self.cfg.n_head
+        channel_range = jnp.arange(0, h, 2, dtype=jnp.float32)
+        inv_freq = 1.0 / (1e4 ** (channel_range / h))
+        # token sequence positions: 0,1,2,...,s
+        t = jnp.arange(s, dtype=jnp.float32)
+        # calculate the angle by which each pair of dimensions should rotate at
+        # each position, then unsqueeze so we can broadcast along the n_head dim
+        theta = jnp.einsum("s,c->sc", t, inv_freq)
+        cos, sin = jnp.cos(theta)[:, None, :], jnp.sin(theta)[:, None, :]
+        cos, sin = cos.astype(compute_dtype), sin.astype(compute_dtype)
         
         for block in self.h:
             attn, mlp = block.attn, block.mlp
-            h = self.cfg.n_embed // self.cfg.n_head
             attn_in = rms_norm(x)
 
             ### causal self attention
@@ -168,15 +177,6 @@ class GPT:
             # apply rotary embeddings (on-the-fly) to our queries, keys, and values
             # we operate on every pair of dimensions, so stride our embed dim by 2
             # we're fixing base_theta to be 10K for now
-            channel_range = jnp.arange(0, h, 2, dtype=jnp.float32)
-            inv_freq = 1.0 / (1e4 ** (channel_range / h))
-            # token sequence positions: 0,1,2,...,s
-            t = jnp.arange(s, dtype=jnp.float32)
-            # calculate the angle by which each pair of dimensions should rotate at
-            # each position, then unsqueeze so we can broadcast along the n_head dim
-            theta = jnp.einsum("s,c->sc", t, inv_freq)
-            cos, sin = jnp.cos(theta)[:, None, :], jnp.sin(theta)[:, None, :]
-            cos, sin = cos.astype(compute_dtype), sin.astype(compute_dtype)
 
             q = apply_rope(q, cos, sin)
             k = apply_rope(k, cos, sin)
