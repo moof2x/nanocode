@@ -23,7 +23,7 @@ class Muon:
     adamw_nu: tuple[jax.Array, jax.Array]
 
     # AdamW hyperparameters
-    b_1: float = 0.9
+    b_1: float = 0.8
     b_2: float = 0.95
     eps: float = 1e-10
     wd: float = 0.0
