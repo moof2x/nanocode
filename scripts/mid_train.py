@@ -28,22 +28,26 @@ from tasks.smoltalk import SmolTalk
 
 config = configs.d3
 ### optimization hparams
-lr = 3e-4
 batch_size = 32
 minibatch_size = 32
 num_steps = -1
-warmup_ratio = 0.0
-warmdown_ratio = 0.2
-final_lr_frac = 0.0
-compute_dtype = jnp.float32
+
+# learning rates
+eps = 1e-10
+wd = 0.0
+wte_lr = 0.2
+lm_head_lr = 0.004
+lr = 0.02
 
 ### misc
 seed = 42
 accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
+compute_dtype = jnp.float32
 
 ### training loop control
 sample_every = 50
 eval_every = 50
+profile_every = 500
 
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["config", "compute_dtype"]
 exec(open(os.path.join('nanojax', 'configurator.py')).read()) # overrides from command line 
@@ -78,48 +82,62 @@ print("="*20)
 num_flops_per_token = estimate_flops(model)
 print(f"Estimated FLOPs per token: {num_flops_per_token}")
 
-state = Muon.init(model)
+state = Muon.init(model, eps=eps,  wd=wd, wte_lr=wte_lr, lm_head_lr=lm_head_lr, lr=lr)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 
 model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 
 last_step = False
-dataset = TaskMixture([
+train_ds = TaskMixture([
     SmolTalk("train", seed),
     Dolly(seed),
     HHRLHF("train", seed),
     MMLU("train", seed)
 ], seed)
 
-cursor = 0
-def dataloader():
-    global last_step, cursor
-    ds_size = len(dataset)
+val_ds = TaskMixture([
+  SmolTalk("test", seed),
+  HHRLHF("test", seed)                  
+], seed)
+approx_progress = 0.0
+def dataloader(split, batch_size):
+    global last_step, approx_progress
+    assert split in {"train", "test"}, "split must be 'train' or 'test'"
+    ds = train_ds if split == "train" else val_ds
+
+    ds_size = len(ds)
+    cursor = 0
     token_buffer = deque()
     needed_tokens = batch_size * max_seq_len + 1
     while True:
         while len(token_buffer) < needed_tokens:
-            sample = dataset[cursor]
+            sample = ds[cursor]
             ids, _ = tokenizer.render_conversation(sample)
             token_buffer.extend(ids)
             cursor += 1
             if cursor >= ds_size:
-                last_step = True
+                if split == "train":
+                    last_step = True
                 cursor -= ds_size # we may need to wrap around to fulfill the remaining needed_tokens for the last step
+        if split == "train":
+            approx_progress = cursor / len(ds)
         scratch = np.array([token_buffer.popleft() for _ in range(needed_tokens)], dtype=np.int32)
         inputs = jnp.asarray(scratch[:-1]).reshape(batch_size, max_seq_len)
         targets = jnp.asarray(scratch[1:]).reshape(batch_size, max_seq_len)
         yield inputs, targets
     
-train_loader = dataloader()
-get_val_dataloader = lambda: tokenizing_data_loader(batch_size, max_seq_len, "val", tokenizer)
-x, y = next(train_loader)
+train_loader = dataloader("train", batch_size)
+get_val_dataloader = lambda : dataloader("test", minibatch_size)
 trackio.init(
     project="nanojax",
     config=asdict(config)
 )
 
-@jax.jit
+def get_lr_multiplier(progress):
+    # first 80% of training: no decay, then linearly ramp down to 0.
+    return 1 if progress < 0.8 else 1 - (progress - 0.8) / 0.2
+    
+@jax.jit(donate_argnums=(2, 3))
 def train_step(idx, targets, model, state):
     def inner_step(carry, j):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
@@ -134,17 +152,16 @@ def train_step(idx, targets, model, state):
     loss /= grad_accm_steps
 
     # step is accessed globally as it would trigger recompiles if passed to our JIT-ed step
-    updates, state = state.update(model, grads, lr, step + 1)
+    updates, state = state.update(model, grads, lr_multiplier, step + 1)
     model = jax.tree.map(jnp.subtract, model, updates)
     return model, state, loss
 
 # this time we tokenizer prompts using our chat template
 prompts = [
-    "The capital of France is",
-    "The chemical symbol of gold is",
-    "The closest planet to the Sun is",
-    "The opposite of hot is",
-    "The second-last day of the week is"
+    "What is the capital of France?",
+    "What is the chemical symbol of gold?",
+    "What is the closest planet to the Sun?",
+    "What is the opposite of hot?",
 ]
 user_start, user_end = tokenizer.encode_special("<|user_start|>"), tokenizer.encode_special("<|user_end|>")
 assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>"), tokenizer.encode_special("<|assistant_end|>")
@@ -155,7 +172,10 @@ prompt_idx = [p + [assistant_start] for p in prompt_idx]
 prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
 step = 0
 progress = 0.0
+x, y = next(train_loader)
 while True:
+    lr_multiplier = get_lr_multiplier(progress)
+
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
     loss = float(loss) # synchronize
@@ -164,17 +184,21 @@ while True:
     
     if num_steps > 0:
         approx_progress = step / num_steps
-    else:
-        approx_progress = cursor / len(dataset)
     progress = max(progress, approx_progress)
     pct_done = progress * 100
     
     flops_per_sec = num_flops_per_token * x.size / dt
     mfu = 100 * flops_per_sec / accelerator_flops
     tkps = int(x.size // dt)
-    print(f"Step: {step} ({pct_done:.2f}%)| Loss: {loss:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f}")
+    print(f"Step: {step} ({pct_done:.2f}%)| Loss: {loss:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f} | lr_multiplier: {lr_multiplier:.3f}")
+    log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu, "lr_multiplier": lr_multiplier}
     
-    log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu}
+    if (step % profile_every == 0):
+        memory_stats = jax.devices()[0].memory_stats()
+        used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
+        log_dict["peak_bytes_reserved"] = used
+        print(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
+
     if (step % sample_every == 0) or last_step:
         for idx in prompt_idx:
             for i in range(16):
@@ -186,7 +210,7 @@ while True:
     if (step % eval_every == 0) or last_step:
         d0 = time.perf_counter()
         eval_steps = eval_tokens // (minibatch_size * max_seq_len) 
-        val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype)
+        val_bpb = evaluate_bpb(model, get_val_dataloader(), eval_steps, token_bytes, compute_dtype)
         print(f"\tbpb: {val_bpb:.4f} | dt: {(time.perf_counter() - d0):.2f}s")
         log_dict["val/bpb"] = val_bpb
 

@@ -16,7 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 cuda = ["jax[cuda12]"]
 cpu = ["jax"]
-tpu = ["jax[tpu]"]
+tpu = ["jax[tpu]", "libtpu"]
 
 [build-system]
 requires = ["maturin>=1.7,<2.0"]
@@ -29,4 +29,7 @@ python-source = "."
 manifest-path = "rustbpe/Cargo.toml"
 
 [tool.uv]
-find-links = ["https://storage.googleapis.com/jax-releases/libtpu_releases.html"]
+find-links = [
+    "https://storage.googleapis.com/jax-releases/libtpu_releases.html",
+    "https://storage.googleapis.com/libtpu-releases/index.html"
+]

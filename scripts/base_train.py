@@ -44,6 +44,7 @@ compute_dtype = jnp.float32
 ### training loop control
 sample_every = 50
 eval_every = 50
+profile_every = 500
 
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["config", "compute_dtype"]
 exec(open(os.path.join('nanojax', 'configurator.py')).read()) # overrides from command line 
@@ -70,7 +71,6 @@ rng = jax.random.key(seed)
 
 train_loader = tokenizing_data_loader(batch_size, max_seq_len, "train", tokenizer)
 get_val_dataloader = lambda: tokenizing_data_loader(minibatch_size, max_seq_len, "val", tokenizer)
-x, y = next(train_loader)
 
 model = GPT.init(
     config,
@@ -138,6 +138,7 @@ prompt_idx = [tokenizer.encode(p, prepend=tokenizer.get_bos_token_id()) for p in
 prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
 
 step = 0
+x, y = next(train_loader)
 while True:
     last_step = (step + 1) == num_steps
     lr_multiplier = get_lr_multiplier(step)
@@ -152,12 +153,17 @@ while True:
     mfu = 100 * flops_per_sec / accelerator_flops
     tkps = int(x.size // dt)
     eta = ((num_steps - step) * dt) / 60
-    memory_stats = jax.devices()[0].memory_stats()
-    used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
+
+    print(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | | tkps: {tkps} | mfu: {mfu:.2f} | min ETA: {eta:.1f} min | lr_multiplier: {lr_multiplier:.3f}")
+    log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu,  "lr_multiplier": lr_multiplier}
     
-    print(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | | tkps: {tkps} | mfu: {mfu:.2f} | min ETA: {eta:.1f} min | memory: {used:.1f}/{available:.1f}GB")
-    log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu}
-    
+    if (step % profile_every == 0):
+        memory_stats = jax.devices()[0].memory_stats()
+        used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
+        log_dict["peak_bytes_reserved"] = used
+        print(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
+
+
     if (step % sample_every == 0) or last_step:
         for idx in prompt_idx:
             for i in range(16):
