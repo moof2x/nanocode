@@ -11,12 +11,10 @@ import math
 import operator
 from dataclasses import dataclass
 from functools import partial
-
+import itertools
 import jax
 import jax.numpy as jnp
 from jax.tree_util import register_dataclass
-
-from nanojax.common import fold_in_str
 
 # einsum notation:
 #    b: batch
@@ -102,29 +100,30 @@ class GPT:
     @staticmethod              
     def init(cfg: GPTConfig, rng: jax.Array) -> "GPT":
         # random state must be explicitly managed in JAX by "splitting"
-        # random keys. fold_in_str does this by splitting the base key
-        # based on the hash of a given string - in this case the weight name.
+        # random keys. fold_in does this by splitting the base key based on
+        # a given integer
         def init_linear(rng, shape):
             # fan-in-fan-out initialization https://arxiv.org/pdf/2310.17813
             fan_in, fan_out = shape
             std = 1.0 / math.sqrt(fan_in) * min(1.0, math.sqrt(fan_out / fan_in))
             return jax.random.normal(rng, shape) * std
 
+        key = map(partial(jax.random.fold_in, rng), itertools.count())
         # mean 0, std 1 initialization for embedding layer
-        wte = jax.random.normal(fold_in_str(rng, "wte"), (cfg.vocab_size, cfg.n_embed)) 
+        wte = jax.random.normal(next(key), (cfg.vocab_size, cfg.n_embed)) 
         h = []
         head_dim = cfg.n_embed // cfg.n_head
         for i in range(cfg.n_layer):
             # modded-nanogpt suggestion: zero out c_proj in attn and mlp layers
             attn = Attention(
-                c_q=init_linear(fold_in_str(rng, f"{i}_c_q"), (cfg.n_embed, cfg.n_head * head_dim)),
-                c_k=init_linear(fold_in_str(rng, f"{i}_k"), (cfg.n_embed, cfg.n_kv_head * head_dim)),
-                c_v=init_linear(fold_in_str(rng, f"{i}_v"), (cfg.n_embed, cfg.n_kv_head * head_dim)),
+                c_q=init_linear(next(key), (cfg.n_embed, cfg.n_head * head_dim)),
+                c_k=init_linear(next(key), (cfg.n_embed, cfg.n_kv_head * head_dim)),
+                c_v=init_linear(next(key), (cfg.n_embed, cfg.n_kv_head * head_dim)),
                 c_proj = jnp.zeros((cfg.n_embed, cfg.n_embed))
             )
     
             mlp = MLP(
-                c_fc=init_linear(fold_in_str(rng, f"{i}_c_fc"), (cfg.n_embed, 4 * cfg.n_embed)),
+                c_fc=init_linear(next(key), (cfg.n_embed, 4 * cfg.n_embed)),
                 c_proj=jnp.zeros((4 * cfg.n_embed, cfg.n_embed))
             )
             h.append(Block(attn=attn, mlp=mlp))

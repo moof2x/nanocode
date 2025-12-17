@@ -144,9 +144,9 @@ while True:
     lr_multiplier = get_lr_multiplier(step)
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
+    x, y = next(train_loader)
     loss = float(loss) # synchronise
     dt = time.perf_counter() - d0
-    x, y = next(train_loader)
 
     # profiling info
     flops_per_sec = num_flops_per_token * x.size / dt

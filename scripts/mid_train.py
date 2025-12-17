@@ -178,9 +178,9 @@ while True:
 
     d0 = time.perf_counter()
     model, state, loss = train_step(x, y, model, state)
+    x, y = next(train_loader)
     loss = float(loss) # synchronize
     dt = time.perf_counter() - d0
-    x, y = next(train_loader)
     
     if num_steps > 0:
         approx_progress = step / num_steps
