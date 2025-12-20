@@ -71,6 +71,7 @@ rng = jax.random.key(seed)
 
 # distributed setup
 world_size = jax.device_count()
+accelerator_flops *= world_size
 mesh = jax.make_mesh((world_size,), ("b",), axis_types=(jax.sharding.AxisType.Explicit))
 jax.set_mesh(mesh)
 
@@ -84,9 +85,9 @@ model = GPT.init(
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
 if num_steps < 0:
     total_tokens = num_params * 20
-    num_steps = math.ceil(total_tokens / max_seq_len / batch_size) + 1
+    num_steps = math.ceil(total_tokens / max_seq_len / (batch_size * world_size)) + 1
 else:
-    total_tokens = num_steps * max_seq_len * batch_size
+    total_tokens = num_steps * max_seq_len * (batch_size * world_size)
 print(f"{num_params} model parameters")
 print(f"Training on {total_tokens} tokens over {num_steps} steps")
 print("="*20)
@@ -153,6 +154,7 @@ prompts = [
 prompt_idx = [tokenizer.encode(p, prepend=tokenizer.get_bos_token_id()) for p in prompts]
 prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
 
+total_training_time = 0
 step = 0
 x, y = next(train_loader)
 while True:
@@ -169,6 +171,7 @@ while True:
     mfu = 100 * flops_per_sec / accelerator_flops
     tkps = int(x.size // dt)
     eta = ((num_steps - step) * dt) / 60
+    total_training_time += dt
 
     print(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | | tkps: {tkps} | mfu: {mfu:.2f} | min ETA: {eta:.1f} min | lr_multiplier: {lr_multiplier:.3f}")
     log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu,  "lr_multiplier": lr_multiplier}
@@ -190,7 +193,7 @@ while True:
 
     if (step % eval_every == 0) or last_step:
         d0 = time.perf_counter()
-        eval_steps = eval_tokens // (minibatch_size * max_seq_len) 
+        eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size) 
         val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype, mesh)
         print(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
         log_dict["val/bpb"] = val_bpb
@@ -200,6 +203,7 @@ while True:
     if step == num_steps:
         break
 
+print(f"Total training time: {(total_training_time/60):.2f}min")
 save_checkpoint(checkpoint_dir / "model.zarr", model)
 save_checkpoint(checkpoint_dir / "state.zarr", state)
 print(f"Model (model.zarr) and optimizer state (state.zarr) checkpoints saved to {checkpoint_dir}.")
