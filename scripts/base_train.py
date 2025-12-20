@@ -8,12 +8,12 @@ from dataclasses import asdict
 import jax
 import jax.numpy as jnp
 import trackio
-
+from functools import partial
 from nanojax import configs
 from nanojax.adamw import AdamW
 from nanojax.checkpointing import save_checkpoint
 from nanojax.common import get_base_dir
-from nanojax.dataloader import tokenizing_data_loader
+from nanojax.dataloader import get_distributed_dataloader
 from nanojax.eval import evaluate_bpb
 from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
 from nanojax.muon import Muon
@@ -69,8 +69,13 @@ checkpoint_dir = base_dir / "base_checkpoints"
 print(f"Vocab size: {vocab_size}")
 rng = jax.random.key(seed)
 
-train_loader = tokenizing_data_loader(batch_size, max_seq_len, "train", tokenizer)
-get_val_dataloader = lambda: tokenizing_data_loader(minibatch_size, max_seq_len, "val", tokenizer)
+# distributed setup
+world_size = jax.device_count()
+mesh = jax.make_mesh((world_size,), ("b",), axis_types=(jax.sharding.AxisType.Explicit))
+jax.set_mesh(mesh)
+
+train_loader = get_distributed_dataloader(batch_size, max_seq_len, "train", tokenizer, mesh)
+get_val_dataloader = lambda: get_distributed_dataloader(minibatch_size, max_seq_len, "val", tokenizer, mesh)
 
 model = GPT.init(
     config,
@@ -108,8 +113,15 @@ def get_lr_multiplier(step):
         progress = (num_steps - step) / warmdown_iters
         return progress * 1.0 + (1 - progress) * final_lr_frac
 
-    
+# we construct a PartitionSpec with default behaviour indicating to replicate for our model and optimizer states
+model_spec = jax.tree.map(lambda _: jax.P(), model)
+state_spec = jax.tree.map(lambda _: jax.P(), state)
+
+in_specs = (jax.P("b", None), jax.P("b", None), model_spec, state_spec)
+out_specs = (model_spec, state_spec, jax.P())
+
 @jax.jit(donate_argnums=(2, 3))
+@jax.shard_map(in_specs=in_specs, out_specs=out_specs, mesh=mesh)
 def train_step(idx, targets, model, state):
     def inner_step(carry, j):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
@@ -119,10 +131,14 @@ def train_step(idx, targets, model, state):
         loss_accm, grads_accm = carry
         return (loss_accm + loss, jax.tree.map(jnp.add, grads_accm, grads)), None
 
-    (loss, grads), _ = jax.lax.scan(inner_step, (0.0, jax.tree.map(jnp.zeros_like, model)), jnp.arange(grad_accm_steps))
+    initial_loss = jax.lax.pcast(0.0, ("b",), to="varying")
+    (loss, grads), _ = jax.lax.scan(inner_step, (initial_loss, jax.tree.map(jnp.zeros_like, model)), jnp.arange(grad_accm_steps))
     grads = jax.tree.map(lambda g: g / grad_accm_steps, grads)
     loss /= grad_accm_steps
     
+    loss = jax.lax.pmean(loss, "b")
+    grads = jax.lax.pmean(grads, "b")
+
     updates, state = state.update(model, grads, lr_multiplier, step + 1)
     model = jax.tree.map(jnp.subtract, model, updates)
     return model, state, loss
@@ -175,8 +191,8 @@ while True:
     if (step % eval_every == 0) or last_step:
         d0 = time.perf_counter()
         eval_steps = eval_tokens // (minibatch_size * max_seq_len) 
-        val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype)
-        print(f"\tbpb: {val_bpb:.4f} | dt: {(time.perf_counter() - d0):.2f}s")
+        val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype, mesh)
+        print(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
         log_dict["val/bpb"] = val_bpb
 
     step += 1 
