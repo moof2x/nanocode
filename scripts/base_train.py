@@ -4,11 +4,12 @@ import os
 import sys
 import time
 from dataclasses import asdict
+from functools import partial
 
 import jax
 import jax.numpy as jnp
 import trackio
-from functools import partial
+
 from nanojax import configs
 from nanojax.adamw import AdamW
 from nanojax.checkpointing import save_checkpoint
@@ -18,7 +19,6 @@ from nanojax.eval import evaluate_bpb
 from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
-# jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
 
 config = configs.d3
 ### optimization hparams

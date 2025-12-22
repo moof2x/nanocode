@@ -7,11 +7,12 @@
 # if you're wondering about the variable names here and in nanochat
 # they come from https://github.com/openai/gpt-2/blob/master/src/model.py
 
+import itertools
 import math
 import operator
 from dataclasses import dataclass
 from functools import partial
-import itertools
+
 import jax
 import jax.numpy as jnp
 from jax.tree_util import register_dataclass

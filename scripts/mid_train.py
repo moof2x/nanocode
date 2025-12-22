@@ -4,6 +4,7 @@ import os
 import sys
 import time
 from collections import deque
+from functools import partial
 from dataclasses import asdict
 
 import jax
@@ -70,6 +71,11 @@ base_checkpoint_dir = base_dir / "base_checkpoints"
 checkpoint_dir = base_dir / "mid_checkpoints"
 rng = jax.random.key(seed)
 
+# distributed setup
+world_size = jax.device_count()
+accelerator_flops *= world_size
+mesh = jax.make_mesh((world_size,), ("b",), axis_types=(jax.sharding.AxisType.Explicit))
+jax.set_mesh(mesh)
 
 assert vocab_size == config.vocab_size, f"mismatch between tokenizer vocab_size ({vocab_size}) and config vocab_size ({config.vocab_size})"
 model = GPT.init(
@@ -100,7 +106,7 @@ val_ds = TaskMixture([
   HHRLHF("test", seed)                  
 ], seed)
 approx_progress = 0.0
-def dataloader(split, batch_size):
+def dataloader(B, T, split, tokenizer):
     global last_step, approx_progress
     assert split in {"train", "test"}, "split must be 'train' or 'test'"
     ds = train_ds if split == "train" else val_ds
@@ -108,13 +114,14 @@ def dataloader(split, batch_size):
     ds_size = len(ds)
     cursor = 0
     token_buffer = deque()
-    needed_tokens = batch_size * max_seq_len + 1
+    B *= jax.local_device_count() # each process collects data for all of it's local accelerators
+    needed_tokens = B * T + 1
     while True:
         while len(token_buffer) < needed_tokens:
             sample = ds[cursor]
             ids, _ = tokenizer.render_conversation(sample)
             token_buffer.extend(ids)
-            cursor += 1
+            cursor += jax.process_count() 
             if cursor >= ds_size:
                 if split == "train":
                     last_step = True
@@ -122,12 +129,22 @@ def dataloader(split, batch_size):
         if split == "train":
             approx_progress = cursor / len(ds)
         scratch = np.array([token_buffer.popleft() for _ in range(needed_tokens)], dtype=np.int32)
-        inputs = jnp.asarray(scratch[:-1]).reshape(batch_size, max_seq_len)
-        targets = jnp.asarray(scratch[1:]).reshape(batch_size, max_seq_len)
+        inputs = jnp.asarray(scratch[:-1]).reshape(B, T)
+        targets = jnp.asarray(scratch[1:]).reshape(B, T)
         yield inputs, targets
+
+def dist_dataloader(batch_size, seq_len, split, tokenizer, mesh):
+    sharding = jax.NamedSharding(mesh, jax.P("b", None))
+    global_batch_size = batch_size * jax.local_device_count() * jax.process_count()
+    loader = dataloader(batch_size, seq_len, split, tokenizer)
+    return map(
+        partial(jax.make_array_from_process_local_data, sharding, global_shape=(global_batch_size, seq_len)),
+        loader
+    )
     
-train_loader = dataloader("train", batch_size)
-get_val_dataloader = lambda : dataloader("test", minibatch_size)
+    
+train_loader = dist_dataloader(batch_size, max_seq_len, "train", tokenizer, mesh)
+get_val_dataloader = lambda:  dist_dataloader(batch_size, max_seq_len, "test", tokenizer, mesh)
 trackio.init(
     project="nanojax",
     config=asdict(config)
@@ -136,8 +153,16 @@ trackio.init(
 def get_lr_multiplier(progress):
     # first 80% of training: no decay, then linearly ramp down to 0.
     return 1 if progress < 0.8 else 1 - (progress - 0.8) / 0.2
-    
+
+# we construct a PartitionSpec with default behaviour indicating to replicate for our model and optimizer states
+model_spec = jax.tree.map(lambda _: jax.P(), model)
+state_spec = jax.tree.map(lambda _: jax.P(), state)
+
+in_specs = (jax.P("b", None), jax.P("b", None), model_spec, state_spec)
+out_specs = (model_spec, state_spec, jax.P())
+
 @jax.jit(donate_argnums=(2, 3))
+@jax.shard_map(in_specs=in_specs, out_specs=out_specs, mesh=mesh)
 def train_step(idx, targets, model, state):
     def inner_step(carry, j):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
@@ -146,10 +171,14 @@ def train_step(idx, targets, model, state):
         loss, grads = grad_fun(idx_, targets_, model, compute_dtype)
         loss_accm, grads_accm = carry
         return (loss_accm + loss, jax.tree.map(jnp.add, grads_accm, grads)), None
-
-    (loss, grads), _ = jax.lax.scan(inner_step, (0.0, jax.tree.map(jnp.zeros_like, model)), jnp.arange(grad_accm_steps))
+    
+    initial_loss = jax.lax.pcast(0.0, ("b",), to="varying")
+    (loss, grads), _ = jax.lax.scan(inner_step, (initial_loss, jax.tree.map(jnp.zeros_like, model)), jnp.arange(grad_accm_steps))
     grads = jax.tree.map(lambda g: g / grad_accm_steps, grads)
     loss /= grad_accm_steps
+
+    loss = jax.lax.pmean(loss, "b")
+    grads = jax.lax.pmean(grads, "b")
 
     # step is accessed globally as it would trigger recompiles if passed to our JIT-ed step
     updates, state = state.update(model, grads, lr_multiplier, step + 1)
@@ -170,6 +199,8 @@ prompts = [{"messages": [{"role": "user", "content": p}]} for p in prompts]
 prompt_idx = [tokenizer.render_conversation(p)[0] for p in prompts]
 prompt_idx = [p + [assistant_start] for p in prompt_idx]
 prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
+
+total_training_time = 0
 step = 0
 progress = 0.0
 x, y = next(train_loader)
@@ -209,9 +240,9 @@ while True:
 
     if (step % eval_every == 0) or last_step:
         d0 = time.perf_counter()
-        eval_steps = eval_tokens // (minibatch_size * max_seq_len) 
-        val_bpb = evaluate_bpb(model, get_val_dataloader(), eval_steps, token_bytes, compute_dtype)
-        print(f"\tbpb: {val_bpb:.4f} | dt: {(time.perf_counter() - d0):.2f}s")
+        eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size) 
+        val_bpb = evaluate_bpb(model, get_val_dataloader(), eval_steps, token_bytes, compute_dtype, mesh)
+        print(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
         log_dict["val/bpb"] = val_bpb
 
     step += 1 
@@ -219,6 +250,7 @@ while True:
     if (num_steps > 0 and step >= num_steps) or last_step:
         break
 
+print(f"Total training time: {(total_training_time/60):.2f}min")
 save_checkpoint(checkpoint_dir / "model.zarr", model)
 save_checkpoint(checkpoint_dir / "state.zarr", state) 
 print(f"Model (model.zarr) and optimizer state (state.zarr) checkpoints saved to {checkpoint_dir}.")
