@@ -13,8 +13,7 @@ import numpy as np
 import trackio
 
 from nanojax import configs
-from nanojax.adamw import AdamW
-from nanojax.checkpointing import load_checkpoint, save_checkpoint
+from nanojax.checkpointing import load_checkpoint, save_checkpoint, load_model_config
 from nanojax.common import get_base_dir
 from nanojax.dataloader import tokenizing_data_loader
 from nanojax.eval import evaluate_bpb
@@ -27,7 +26,6 @@ from tasks.mixture import TaskMixture
 from tasks.mmlu import MMLU
 from tasks.smoltalk import SmolTalk
 
-config = configs.d3
 ### optimization hparams
 batch_size = 32
 minibatch_size = 32
@@ -50,7 +48,7 @@ sample_every = 50
 eval_every = 50
 profile_every = 500
 
-config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["config", "compute_dtype"]
+config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["compute_dtype"]
 exec(open(os.path.join('nanojax', 'configurator.py')).read()) # overrides from command line 
 user_config = {k: globals()[k] for k in config_keys} 
 command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
@@ -60,8 +58,6 @@ for k, v in user_config.items():
 
 grad_accm_steps = batch_size // minibatch_size
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
-max_seq_len = config.sequence_len
-eval_tokens = batch_size * max_seq_len* 20 # magic number from nanochat
 
 tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
@@ -69,8 +65,11 @@ vocab_size = tokenizer.get_vocab_size()
 base_dir = get_base_dir()
 base_checkpoint_dir = base_dir / "base_checkpoints"
 checkpoint_dir = base_dir / "mid_checkpoints"
+config = load_model_config(base_checkpoint_dir / "model.zarr")
 rng = jax.random.key(seed)
 
+max_seq_len = config.sequence_len
+eval_tokens = batch_size * max_seq_len* 20 # magic number from nanochat
 # distributed setup
 world_size = jax.device_count()
 accelerator_flops *= world_size
@@ -144,7 +143,7 @@ def dist_dataloader(batch_size, seq_len, split, tokenizer, mesh):
     
     
 train_loader = dist_dataloader(batch_size, max_seq_len, "train", tokenizer, mesh)
-get_val_dataloader = lambda:  dist_dataloader(batch_size, max_seq_len, "test", tokenizer, mesh)
+get_val_dataloader = lambda:  dist_dataloader(minibatch_size, max_seq_len, "test", tokenizer, mesh)
 trackio.init(
     project="nanojax",
     config=asdict(config)

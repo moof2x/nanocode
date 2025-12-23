@@ -5,16 +5,21 @@ import jax.numpy as jnp
 import numpy as np
 import zarr
 
-from nanojax.gpt import GPT
+from nanojax.gpt import GPT, GPTConfig
 from nanojax.muon import Muon
 
 
 def save_checkpoint(filename: Path, state: GPT | Muon):
-    state, _ = jax.tree.flatten_with_path(state)
+    state_dict, _ = jax.tree.flatten_with_path(state)
     root = zarr.open_group(filename, mode="w")
-    for path, arr in state:
+    for path, arr in state_dict:
         root[jax.tree_util.keystr(path)] = np.asarray(arr)
+    if isinstance(state, GPT):
+        root.attrs["config"] = state.cfg
 
+def load_model_config(filename: Path) -> GPTConfig:
+    root = zarr.open_group(filename, mode="r")
+    return GPTConfig(**root.attrs["config"])
 
 def load_checkpoint(filename: Path, state: GPT | Muon):
     state, treedef = jax.tree.flatten_with_path(state)

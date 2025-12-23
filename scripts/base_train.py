@@ -177,7 +177,7 @@ while True:
     log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu,  "lr_multiplier": lr_multiplier}
     
     if (step % profile_every == 0):
-        memory_stats = jax.devices()[0].memory_stats()
+        memory_stats = jax.devices()[0].memory_stats() or {}
         used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
         log_dict["peak_bytes_reserved"] = used
         print(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
