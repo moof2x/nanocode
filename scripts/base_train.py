@@ -39,7 +39,7 @@ lr = 0.02
 ### misc
 seed = 42
 accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
-compute_dtype = jnp.float32
+compute_dtype = jnp.bfloat16
 
 ### training loop control
 sample_every = 50
@@ -82,13 +82,16 @@ model = GPT.init(
     config,
     rng
 )
+    
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
+print(f"{num_params} model parameters")
+
 if num_steps < 0:
     total_tokens = num_params * 20
     num_steps = math.ceil(total_tokens / max_seq_len / (batch_size * world_size)) + 1
 else:
     total_tokens = num_steps * max_seq_len * (batch_size * world_size)
-print(f"{num_params} model parameters")
+
 print(f"Training on {total_tokens} tokens over {num_steps} steps")
 print("="*20)
 
@@ -186,7 +189,8 @@ while True:
     if (step % sample_every == 0) or last_step:
         for idx in prompt_idx:
             for i in range(16):
-                logits = model.forward(idx, compute_dtype)[:, -1, :] # bsv -> bv
+                logits, _ = model.forward(idx, compute_dtype=compute_dtype)
+                logits = logits[:, -1, :] # bsv -> bv
                 pred = jnp.argmax(logits, axis=-1, keepdims=True)
                 idx = jnp.concat([idx, pred], axis=1)
             print("\t" + tokenizer.decode(idx[0]))

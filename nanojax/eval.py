@@ -5,6 +5,7 @@ import jax.numpy as jnp
 
 from nanojax.gpt import calculate_loss
 
+
 def evaluate_bpb(model, dataloader, steps, token_bytes, compute_dtype, mesh):
     @jax.jit
     @jax.shard_map(
@@ -18,7 +19,7 @@ def evaluate_bpb(model, dataloader, steps, token_bytes, compute_dtype, mesh):
         out_specs=(jax.P(), jax.P())
     )
     def eval_step(model, x, y, token_bytes):
-        loss = calculate_loss(x, y, model, compute_dtype, reduce=False).flatten()
+        loss = calculate_loss(x, y, model, compute_dtype=compute_dtype, reduce=False).flatten()
         y = y.flatten()
         num_bytes = token_bytes[y]
         

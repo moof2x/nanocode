@@ -28,12 +28,7 @@ def load_checkpoint(filename: Path, state: GPT | Muon):
     for path, arr in state:
         path = jax.tree_util.keystr(path)
         new_arr = root[path]
-        try:
-            assert arr.shape == new_arr.shape, f"Expected shape {arr.shape} but got {new_arr.shape} for {path} in {filename}"
-        except:
-            x = 10
-            import pdb
-            pdb.set_trace()
+        assert arr.shape == new_arr.shape, f"Expected shape {arr.shape} but got {new_arr.shape} for {path} in {filename}"
         assert arr.dtype == new_arr.dtype, f"Expected dtype {arr.dtype} but got {new_arr.dtype} for {path} in {filename}"
         del arr
         new_state.append(jnp.asarray(new_arr))

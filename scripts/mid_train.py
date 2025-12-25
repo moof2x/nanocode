@@ -4,8 +4,8 @@ import os
 import sys
 import time
 from collections import deque
-from functools import partial
 from dataclasses import asdict
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -13,7 +13,7 @@ import numpy as np
 import trackio
 
 from nanojax import configs
-from nanojax.checkpointing import load_checkpoint, save_checkpoint, load_model_config
+from nanojax.checkpointing import load_checkpoint, load_model_config, save_checkpoint
 from nanojax.common import get_base_dir
 from nanojax.dataloader import tokenizing_data_loader
 from nanojax.eval import evaluate_bpb
@@ -41,7 +41,7 @@ lr = 0.02
 ### misc
 seed = 42
 accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
-compute_dtype = jnp.float32
+compute_dtype = jnp.bfloat16
 
 ### training loop control
 sample_every = 50
@@ -82,6 +82,7 @@ model = GPT.init(
     rng
 )
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
+print(f"{num_params} model parameters")
 print("="*20)
 
 num_flops_per_token = estimate_flops(model)
@@ -118,7 +119,7 @@ def dataloader(B, T, split, tokenizer):
     while True:
         while len(token_buffer) < needed_tokens:
             sample = ds[cursor]
-            ids, _ = tokenizer.render_conversation(sample)
+            ids, _ = tokenizer.render_conversation(sample, max_tokens=T)
             token_buffer.extend(ids)
             cursor += jax.process_count() 
             if cursor >= ds_size:
@@ -220,6 +221,8 @@ while True:
     flops_per_sec = num_flops_per_token * x.size / dt
     mfu = 100 * flops_per_sec / accelerator_flops
     tkps = int(x.size // dt)
+    total_training_time += dt
+
     print(f"Step: {step} ({pct_done:.2f}%)| Loss: {loss:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f} | lr_multiplier: {lr_multiplier:.3f}")
     log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu, "lr_multiplier": lr_multiplier}
     
@@ -232,7 +235,8 @@ while True:
     if (step % sample_every == 0) or last_step:
         for idx in prompt_idx:
             for i in range(16):
-                logits = model.forward(idx, compute_dtype)[:, -1, :] # bsv -> bv
+                logits, _ = model.forward(idx, compute_dtype=compute_dtype)
+                logits = logits[:, -1, :] # bsv -> bv
                 pred = jnp.argmax(logits, axis=-1, keepdims=True)
                 idx = jnp.concat([idx, pred], axis=1)
             print(tokenizer.decode(idx[0]))

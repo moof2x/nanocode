@@ -10,7 +10,7 @@
 import itertools
 import math
 import operator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 
 import jax
@@ -19,6 +19,7 @@ from jax.tree_util import register_dataclass
 
 # einsum notation:
 #    b: batch
+#    n: n_layer
 #    s: sequence len
 #    v: vocab_size
 #    e: n_embed, embedding dim
@@ -27,6 +28,34 @@ from jax.tree_util import register_dataclass
 #    h: head_dim
 #    Q: n_head * head_dim 
 #    K: n_kv_head * head_dim
+
+@register_dataclass
+@dataclass
+class KVCache:
+    k: jax.Array # nbskh
+    v: jax.Array # nbskh
+    pos: jax.Array # current  position in the sequence
+
+    def init(batch_size : int, max_seq_len: int, n_layer: int, embed_dim: int, n_head: int, n_kv_head: int, compute_dtype: jnp.dtype):
+        head_dim = embed_dim // n_head
+        return KVCache(
+            k=jnp.zeros((n_layer, batch_size, max_seq_len, n_kv_head, head_dim), dtype=compute_dtype),
+            v=jnp.zeros((n_layer, batch_size, max_seq_len, n_kv_head, head_dim), dtype=compute_dtype),
+            pos=jnp.array(0, dtype=jnp.int32)
+        )
+
+    def update(self, k: jax.Array, v: jax.Array, layer_idx: int):
+        # k,v: bskh
+        s = k.shape[1]
+        # store our updated kv cache values
+        k = jax.lax.dynamic_update_slice(self.k, k[None], (layer_idx, 0, self.pos, 0, 0))
+        v = jax.lax.dynamic_update_slice(self.v, v[None], (layer_idx, 0, self.pos, 0, 0))
+        return k[layer_idx], v[layer_idx], replace(self, k=k, v=v)
+
+    def forward_pos(self, s: int):
+        # forward cache pos sequence len positions along
+        return replace(self, pos=self.pos + s)
+        
 
 def rms_norm(x: jax.Array) -> jax.Array:
     # performing rms norm in fp32 is typically more numerically stable
@@ -138,7 +167,7 @@ class GPT:
             cfg=cfg
         )
         
-    def forward(self, idx: jax.Array, compute_dtype: jnp.dtype):
+    def forward(self, idx: jax.Array, mask: jax.Array = None, compute_dtype: jnp.dtype = jnp.bfloat16, kv_cache: KVCache = None):
         cfg = self.cfg        
         b, s =  idx.shape
         # one slight downside to working in pure JAX is that we don't have a nice
@@ -155,37 +184,51 @@ class GPT:
         x = rms_norm(x)
 
         h = self.cfg.n_embed // self.cfg.n_head
+        # prepare our rotary position embeddings once
         channel_range = jnp.arange(0, h, 2, dtype=jnp.float32)
         inv_freq = 1.0 / (1e4 ** (channel_range / h))
+        is_causal = mask is None
+        
         # token sequence positions: 0,1,2,...,s
-        t = jnp.arange(s, dtype=jnp.float32)
+        if kv_cache is not None:
+            # if we're decoding we only need to generate embeddings for positions we
+            # haven't seen yet
+            t = jnp.arange(s, dtype=jnp.float32) + kv_cache.pos
+        else:
+            t = jnp.arange(s, dtype=jnp.float32)
+        
         # calculate the angle by which each pair of dimensions should rotate at
         # each position, then unsqueeze so we can broadcast along the n_head dim
         theta = jnp.einsum("s,c->sc", t, inv_freq)
+        # we operate on every pair of dimensions, so stride our embed dim by 2
+        # we're fixing base_theta to be 10K for now
         cos, sin = jnp.cos(theta)[:, None, :], jnp.sin(theta)[:, None, :]
         cos, sin = cos.astype(compute_dtype), sin.astype(compute_dtype)
         
-        for block in self.h:
+        for i, block in enumerate(self.h):
             attn, mlp = block.attn, block.mlp
             attn_in = rms_norm(x)
 
             ### causal self attention
             q = jnp.einsum("bse,eQ->bsQ", attn_in, attn.c_q.astype(compute_dtype)).reshape(b, s, cfg.n_head, h)
+
+            # k,v: bse -> bsK -> bskh
             k = jnp.einsum("bse,eK->bsK", attn_in, attn.c_k.astype(compute_dtype)).reshape(b, s, cfg.n_kv_head, h)
             v = jnp.einsum("bse,eK->bsK", attn_in, attn.c_v.astype(compute_dtype)).reshape(b, s, cfg.n_kv_head, h)
-            
+        
             # apply rotary embeddings (on-the-fly) to our queries, keys, and values
-            # we operate on every pair of dimensions, so stride our embed dim by 2
-            # we're fixing base_theta to be 10K for now
-
             q = apply_rope(q, cos, sin)
             k = apply_rope(k, cos, sin)
+
+            if kv_cache is not None:
+                k, v, kv_cache = kv_cache.update(k, v, i)
+
             # QK norm
             q = rms_norm(q)
             k = rms_norm(k)
 
             # scaled dot product attention
-            attn_out = jax.nn.dot_product_attention(q, k, v, is_causal=True)
+            attn_out = jax.nn.dot_product_attention(q, k, v, is_causal=is_causal, mask=mask)
             attn_out = attn_out.reshape(b, s, cfg.n_embed)
             attn_out = jnp.einsum("bse,eE->bsE", attn_out, attn.c_proj.astype(compute_dtype))
 
@@ -198,6 +241,9 @@ class GPT:
             mlp_out = jax.lax.square(jax.nn.relu(mlp_out)) # modded-nanogpt introduced the use of relu^2
             mlp_out = jnp.einsum("bsE,Ee->bse", mlp_out, mlp.c_proj.astype(compute_dtype))
             x = x + mlp_out
+        
+        if kv_cache is not None:
+            kv_cache = kv_cache.forward_pos(s)
             
         x = rms_norm(x)
         # perform logit softcapping
@@ -205,7 +251,8 @@ class GPT:
         logits = jnp.einsum("bse,ev->bsv", x, self.lm_head.astype(compute_dtype))
         # note: we CE in fp32, so no mixed precision here
         logits = softcap * jax.nn.tanh(logits / softcap)
-        return logits.astype(jnp.float32)
+        # i hate runtime-defined function signatures but this is the price we pay for JIT - all state is immutable
+        return logits.astype(jnp.float32), kv_cache 
 
 def estimate_flops(model: GPT):
     num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
@@ -215,8 +262,8 @@ def estimate_flops(model: GPT):
     return num_flops_per_token
 
 
-def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT, dtype: jnp.dtype, reduce: bool=True) -> jax.Array:
-    logits = model.forward(idx, dtype)
+def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT, compute_dtype: jnp.dtype=jnp.bfloat16, reduce: bool=True) -> jax.Array:
+    logits, _ = model.forward(idx, compute_dtype=compute_dtype)
     # cross entropy loss using logsumexp
     logsumexp = jax.nn.logsumexp(logits, axis=-1)
     # TODO add support for ignore index
