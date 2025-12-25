@@ -25,6 +25,7 @@ config = configs.d3
 batch_size = 32
 minibatch_size = 32
 num_steps = -1
+grad_clip = 1.0
 
 # learning rates/scheduling
 warmup_ratio = 0.0
@@ -143,6 +144,10 @@ def train_step(idx, targets, model, state):
     loss = jax.lax.pmean(loss, "b")
     grads = jax.lax.pmean(grads, "b")
 
+    # grad norm clipping
+    global_norm = jnp.sqrt(jax.tree.reduce(operator.add, jax.tree.map(lambda g: jnp.sum(jax.lax.square(g)), grads)))
+    grads = jax.tree.map(lambda g: g * jnp.minimum(1.0, grad_clip / (global_norm + 1e-6)), grads)
+    
     updates, state = state.update(model, grads, lr_multiplier, step + 1)
     model = jax.tree.map(jnp.subtract, model, updates)
     return model, state, loss
