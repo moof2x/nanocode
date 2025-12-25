@@ -13,6 +13,7 @@ checkpoint = "mid"
 compute_dtype = jnp.bfloat16
 max_tokens = 16
 seed = 42
+temperature = 0.6
 
 exec(open(os.path.join('nanojax', 'configurator.py')).read()) # overrides from command line 
 command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
@@ -22,6 +23,7 @@ tokenizer = get_tokenizer()
 base_dir = get_base_dir()
 checkpoint_dir = base_dir / f"{checkpoint}_checkpoints"
 model_cfg = load_model_config(checkpoint_dir / "model.zarr")
+
 rng = jax.random.key(seed)
 
 model = GPT.init(
@@ -31,7 +33,8 @@ model = GPT.init(
 model = load_checkpoint(checkpoint_dir / "model.zarr", model)
 
 max_seq_len = model_cfg.sequence_len * 2
-def generate(idx):
+
+def generate(idx, rng):
     # setup KV-caches for a single sample and up to 2x model context length
     kv_cache = KVCache.init(
         batch_size=1,
@@ -45,25 +48,33 @@ def generate(idx):
     idx = jnp.asarray(idx, dtype=jnp.int32)[None, :]
     # prefill
     logits, kv_cache = model.forward(idx, compute_dtype=compute_dtype, kv_cache=kv_cache)
-    logits = logits[:, -1, :] # bsv -> bv
-    
-    pred = jnp.argmax(logits, axis=-1, keepdims=True)
+    logits = logits[:, -1:, :] # bsv -> bv
+    if temperature is not None:
+        rng, key = jax.random.split(rng)
+        pred = jax.random.categorical(key, logits / temperature)
+    else: 
+        pred = jnp.argmax(logits, axis=-1)
     idx = jnp.concat((idx, pred), axis=1)
     
     @jax.jit
-    def generate_next_token(idx, mask, kv_cache):
+    def generate_next_token(idx, mask, kv_cache, key):
         logits, kv_cache = model.forward(idx, mask=mask, compute_dtype=compute_dtype, kv_cache=kv_cache)
-        logits = logits[:, -1, :] # bsv -> bv
-        pred = jnp.argmax(logits, axis=-1, keepdims=True)
+        logits = logits[:, -1:, :] # bsv -> b1v
+        if temperature is not None:
+            pred = jax.random.categorical(key, logits / temperature)
+        else: 
+            pred =  jnp.argmax(logits, axis=-1)
         return pred, kv_cache
 
-    for _ in range(max_tokens):
+    for i in range(max_tokens):
         # async kick off generation for the next token
         # our cached k,v are 0s for all positions we haven't filled yet up to our
         # pre-defined cache max_seq_len, so we need to mask these out.
         s = idx.shape[1]
-        mask = jnp.arange(kv_cache.k.shape[1]) < kv_cache.pos + s
-        next_token, kv_cache = generate_next_token(pred, mask, kv_cache)
+        mask = jnp.arange(kv_cache.k.shape[2]) < kv_cache.pos + s
+        rng, key = jax.random.split(rng)
+        # async kick off next token generation
+        next_token, kv_cache = generate_next_token(pred, mask, kv_cache, key)
         yield pred[0]
         pred = next_token
         idx = jnp.concat((idx, pred), axis=1)
@@ -88,7 +99,7 @@ while True:
     tokens.append(assistant_start)
     print("\nAssistant: ", end="", flush=True)
 
-    for token in generate(tokens):
+    for token in generate(tokens, rng):
         tokens.append(token[0])
         if token[0] == assistant_end:
             break
@@ -100,6 +111,7 @@ while True:
         print(f"Max sequence len {max_seq_len} exceeded. Goodbye!")
         break
 
+    rng, _ = jax.random.split(rng)
     print()
     
     
