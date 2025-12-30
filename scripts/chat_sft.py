@@ -26,10 +26,13 @@ from tasks.mixture import TaskMixture
 from tasks.mmlu import MMLU
 from tasks.smoltalk import SmolTalk
 
+checkpoint = "mid"
+
 ### optimization hparams
 batch_size = 32
 minibatch_size = 32
 num_steps = -1
+num_epochs = 1
 
 # learning rates
 eps = 1e-10
@@ -37,6 +40,7 @@ wd = 0.0
 wte_lr = 0.2
 lm_head_lr = 0.004
 lr = 0.02
+init_lr_frac = 0.02
 
 ### misc
 seed = 42
@@ -63,8 +67,8 @@ tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
 base_dir = get_base_dir()
-base_checkpoint_dir = base_dir / "base_checkpoints"
-checkpoint_dir = base_dir / "mid_checkpoints"
+base_checkpoint_dir = base_dir / f"{checkpoint}_checkpoints"
+checkpoint_dir = base_dir / "sft_checkpoints"
 config = load_model_config(base_checkpoint_dir / "model.zarr")
 rng = jax.random.key(seed)
 
@@ -88,12 +92,18 @@ print("="*20)
 num_flops_per_token = estimate_flops(model)
 print(f"Estimated FLOPs per token: {num_flops_per_token}")
 
-state = Muon.init(model, eps=eps,  wd=wd, wte_lr=wte_lr, lm_head_lr=lm_head_lr, lr=lr)
+state = Muon.init(
+    model,
+    eps=eps,
+    wd=wd,
+    wte_lr=wte_lr * init_lr_frac,
+    lm_head_lr=lm_head_lr * init_lr_frac,
+    lr=lr * init_lr_frac
+)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
 
 model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 
-last_step = False
 train_ds = TaskMixture([
     SmolTalk("train", seed), # 460K rows
     Dolly(seed), # 10K rows
@@ -105,59 +115,63 @@ val_ds = TaskMixture([
   SmolTalk("test", seed),
   HHRLHF("test", seed)                  
 ], seed)
-approx_progress = 0.0
-def dataloader(dataset, B, T, split, tokenizer):
-    global last_step, approx_progress
 
-    ds_size = len(dataset)
-    cursor = 0
-    token_buffer = deque()
+def dataloader(dataset, B, T, tokenizer):
+    pad_token_id = tokenizer.encode_special("<|assistant_end|>")
     B *= jax.local_device_count() # each process collects data for all of it's local accelerators
-    needed_tokens = B * T + 1
-    while True:
-        while len(token_buffer) < needed_tokens:
-            sample = dataset[cursor]
-            ids, _ = tokenizer.render_conversation(sample, max_tokens=T)
-            token_buffer.extend(ids)
-            cursor += jax.process_count() 
-            if cursor >= ds_size:
-                if split == "train":
-                    last_step = True
-                cursor -= ds_size # we may need to wrap around to fulfill the remaining needed_tokens for the last step
-        if split == "train":
-            approx_progress = cursor / len(dataset)
-        scratch = np.array([token_buffer.popleft() for _ in range(needed_tokens)], dtype=np.int32)
-        inputs = jnp.asarray(scratch[:-1]).reshape(B, T)
-        targets = jnp.asarray(scratch[1:]).reshape(B, T)
-        yield inputs, targets
 
-def dist_dataloader(dataset, batch_size, seq_len, split, tokenizer, mesh):
+    def collate(batch):
+        # we always pad or truncate to max seq len
+        inputs = np.full((B, T), pad_token_id, dtype=np.int32)
+        targets = np.full_like(inputs, -1)
+        
+        for i, (ids, mask) in enumerate(batch):
+            n = len(ids)
+            inputs[i, :n-1] = ids[:-1]
+            row_targets = ids[1:n]
+            row_targets[mask[1:n] == 0] = -1
+            targets[i, :n-1] = row_targets
+        return jnp.asarray(inputs), jnp.asarray(targets)
+            
+    batch = []
+    while True:
+        for i in range(jax.process_index(), len(dataset), jax.process_count()):
+            batch.append(tokenizer.render_conversation(dataset[i], max_tokens=T+1))
+            if len(batch) == batch_size:
+                yield collate(batch)
+                batch = []
+
+def dist_dataloader(dataset, batch_size, seq_len, tokenizer, mesh):
     sharding = jax.NamedSharding(mesh, jax.P("b", None))
     global_batch_size = batch_size * world_size
-    loader = dataloader(dataset, batch_size, seq_len, split,  tokenizer)
+    loader = dataloader(dataset, batch_size, seq_len, tokenizer)
     return map(
         partial(jax.make_array_from_process_local_data, sharding, global_shape=(global_batch_size, seq_len)),
         loader
     )
     
-    
-train_loader = dist_dataloader(train_ds, batch_size, max_seq_len, "train", tokenizer, mesh)
-get_val_dataloader = lambda:  dist_dataloader(val_ds, minibatch_size, max_seq_len, "test", tokenizer, mesh)
+
+train_loader = dist_dataloader(train_ds, batch_size, max_seq_len, tokenizer, mesh)
+get_val_dataloader = lambda:  dist_dataloader(val_ds, minibatch_size, max_seq_len, tokenizer, mesh)
 trackio.init(
     project="nanojax",
     config=asdict(config)
 )
 
-def get_lr_multiplier(progress):
-    # first 80% of training: no decay, then linearly ramp down to 0.
-    return 1 if progress < 0.8 else 1 - (progress - 0.8) / 0.2
+steps_per_epoch = len(train_ds) // (batch_size * world_size)
+if num_steps < 0:
+    num_steps = steps_per_epoch * num_epochs
+
+def get_lr_multiplier(step):
+    # linear lr decay
+    return 1 - step / num_steps
 
 # we construct a PartitionSpec with default behaviour indicating to replicate for our model and optimizer states
 model_spec = jax.tree.map(lambda _: jax.P(), model)
 state_spec = jax.tree.map(lambda _: jax.P(), state)
 
 in_specs = (jax.P("b", None), jax.P("b", None), model_spec, state_spec)
-out_specs = (model_spec, state_spec, jax.P())
+out_specs = (model_spec, state_spec, jax.P(), jax.P())
 
 @jax.jit(donate_argnums=(2, 3))
 @jax.shard_map(in_specs=in_specs, out_specs=out_specs, mesh=mesh)
@@ -166,7 +180,7 @@ def train_step(idx, targets, model, state):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
         targets_ = jax.lax.dynamic_slice_in_dim(targets, j * minibatch_size, minibatch_size, axis=0)
 
-        loss, grads = grad_fun(idx_, targets_, model, compute_dtype=compute_dtype)
+        loss, grads = grad_fun(idx_, targets_, model, ignore_idx=-1, compute_dtype=compute_dtype)
         loss_accm, grads_accm = carry
         return (loss_accm + loss, jax.tree.map(jnp.add, grads_accm, grads)), None
     
@@ -177,11 +191,12 @@ def train_step(idx, targets, model, state):
 
     loss = jax.lax.pmean(loss, "b")
     grads = jax.lax.pmean(grads, "b")
-
+    valid_tokens = jnp.sum(targets >= 0)
+    total_tokens = jax.lax.psum(valid_tokens, "b")
     # step is accessed globally as it would trigger recompiles if passed to our JIT-ed step
     updates, state = state.update(model, grads, lr_multiplier, step + 1)
     model = jax.tree.map(jnp.subtract, model, updates)
-    return model, state, loss
+    return model, state, loss, total_tokens
 
 # this time we tokenizer prompts using our chat template
 prompts = [
@@ -199,33 +214,30 @@ prompt_idx = [p + [assistant_start] for p in prompt_idx]
 prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
 
 total_training_time = 0
-step = 0
-progress = 0.0
 x, y = next(train_loader)
-while True:
-    lr_multiplier = get_lr_multiplier(progress)
+for step in range(num_steps):
+    last_step = (step + 1) == num_steps
+    lr_multiplier = get_lr_multiplier(step)
 
     d0 = time.perf_counter()
-    model, state, loss = train_step(x, y, model, state)
+    model, state, loss, total_tokens = train_step(x, y, model, state)
     x, y = next(train_loader)
     loss = float(loss) # synchronize
+    total_tokens = int(total_tokens)
     dt = time.perf_counter() - d0
     
-    if num_steps > 0:
-        approx_progress = step / num_steps
-    progress = max(progress, approx_progress)
-    pct_done = progress * 100
-    
-    flops_per_sec = num_flops_per_token * x.size / dt
+    flops_per_sec = num_flops_per_token * total_tokens / dt
     mfu = 100 * flops_per_sec / accelerator_flops
-    tkps = int(x.size // dt)
+    tkps = int(total_tokens // dt)
+    eta = ((num_steps - step) * dt) / 60
     total_training_time += dt
 
-    print(f"Step: {step} ({pct_done:.2f}%)| Loss: {loss:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f} | lr_multiplier: {lr_multiplier:.3f}")
+
+    print(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f} | min ETA {eta:.1f} | lr_multiplier: {lr_multiplier:.3f}")
     log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu, "lr_multiplier": lr_multiplier}
     
     if (step % profile_every == 0):
-        memory_stats = jax.devices()[0].memory_stats()
+        memory_stats = jax.devices()[0].memory_stats() or {}
         used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
         log_dict["peak_bytes_reserved"] = used
         print(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
@@ -246,14 +258,12 @@ while True:
         print(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
         log_dict["val/bpb"] = val_bpb
 
-    step += 1 
     trackio.log(log_dict)
-    if (num_steps > 0 and step >= num_steps) or last_step:
-        break
 
 print(f"Total training time: {(total_training_time/60):.2f}min")
 save_checkpoint(checkpoint_dir / "model.zarr", model)
 save_checkpoint(checkpoint_dir / "state.zarr", state) 
 print(f"Model (model.zarr) and optimizer state (state.zarr) checkpoints saved to {checkpoint_dir}.")
 trackio.finish()
+
 

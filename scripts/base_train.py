@@ -132,7 +132,7 @@ def train_step(idx, targets, model, state):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
         targets_ = jax.lax.dynamic_slice_in_dim(targets, j * minibatch_size, minibatch_size, axis=0)
 
-        loss, grads = grad_fun(idx_, targets_, model, compute_dtype)
+        loss, grads = grad_fun(idx_, targets_, model, compute_dtype=compute_dtype)
         loss_accm, grads_accm = carry
         return (loss_accm + loss, jax.tree.map(jnp.add, grads_accm, grads)), None
 

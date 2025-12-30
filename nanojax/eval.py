@@ -21,8 +21,10 @@ def evaluate_bpb(model, dataloader, steps, token_bytes, compute_dtype, mesh):
     def eval_step(model, x, y, token_bytes):
         loss = calculate_loss(x, y, model, compute_dtype=compute_dtype, reduce=False).flatten()
         y = y.flatten()
-        num_bytes = token_bytes[y]
-        
+        valid_targets = y >= 0
+        safe_y = jnp.where(valid_targets, y, 0)
+        num_bytes = jnp.where(valid_targets, token_bytes[safe_y], 0)
+
         local_nats = (loss * (num_bytes > 0)).sum()
         local_bytes = num_bytes.sum()
         
@@ -31,7 +33,6 @@ def evaluate_bpb(model, dataloader, steps, token_bytes, compute_dtype, mesh):
         
         return total_nats, total_bytes
     
-    # rest of evaluate_bpb
     total_nats = jnp.asarray(0)
     total_bytes = jnp.asarray(0, dtype=jnp.int32)
     for _ in range(steps):
