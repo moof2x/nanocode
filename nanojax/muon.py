@@ -11,7 +11,7 @@ from nanojax.gpt import GPT, Block
 
 @partial(
     register_dataclass,
-    data_fields=["adamw_mu", "adamw_nu", "mu"],
+    data_fields=["adamw_mu", "adamw_nu", "mu", "step"],
     meta_fields=["b_1", "b_2", "eps", "wd", "ns_steps", "wte_lr", "lm_head_lr", "lr"]
 )
 @dataclass
@@ -22,6 +22,9 @@ class Muon:
     # AdamW states for embedding/lm_head respectively
     adamw_mu: tuple[jax.Array, jax.Array]
     adamw_nu: tuple[jax.Array, jax.Array]
+
+    # training step counter for scaling learning rates/momentum
+    step: jax.Array
 
     # AdamW hyperparameters
     b_1: float = 0.8
@@ -36,25 +39,27 @@ class Muon:
     lm_head_lr: float = 0.004
     lr: float = 0.02
 
+
     @staticmethod              
     def init(model: GPT, **kwargs):
         adamw_mu = (model.wte * 0.0, model.lm_head * 0.0)
         adamw_nu = (model.wte * 0.0, model.lm_head * 0.0)
         mu = jax.tree.map(lambda p: p * 0.0, model.h)
 
-        optimizer = Muon(mu=mu, adamw_mu=adamw_mu, adamw_nu=adamw_nu, **kwargs)
+        optimizer = Muon(mu=mu, adamw_mu=adamw_mu, adamw_nu=adamw_nu, step=jnp.array(1, dtype=jnp.int32), **kwargs)
         # lr AdamW scaling
         dmodel_lr_scale = (model.cfg.n_embed / 768) ** -0.5
         print0(f"Scaling the LR for the AdamW parameters ∝1/√({model.cfg.n_embed}/768) = {dmodel_lr_scale:.6f}")
         return replace(optimizer, wte_lr=optimizer.wte_lr * dmodel_lr_scale, lm_head_lr=optimizer.lm_head_lr * dmodel_lr_scale)
 
-    def update(self, model: GPT, grads: GPT, lr_multiplier: float, step: int):
+    def update(self, model: GPT, grads: GPT, lr_multiplier: float):
         """
         This function applies Muon updates to all 2D matrices in our model, and AdamW to
         our embedding and classifier layers.
         Since we're returning a single update, u, to be subtracted from our model parameters,
         some of the signage may look slightly different to other implementations.        
         """
+        step = self.step
         ### learning rate/momentum updates
         # momentum scheduler
         frac = jnp.minimum(step / 300, 1)
@@ -119,7 +124,7 @@ class Muon:
             cfg=model.cfg
         )
 
-        # we only need to update our optimizer states as the rest of the fields are static
-        return updates, replace(self, mu=mu, adamw_mu=adamw_mu, adamw_nu=adamw_nu)     
+        # we only need to update our optimizer states and step counter as the rest of the fields are static
+        return updates, replace(self, mu=mu, adamw_mu=adamw_mu, adamw_nu=adamw_nu, step=step+1)     
 
 

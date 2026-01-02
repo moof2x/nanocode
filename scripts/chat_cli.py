@@ -1,5 +1,6 @@
 import os
 import sys
+from dataclasses import replace
 
 import jax
 import jax.numpy as jnp
@@ -12,7 +13,7 @@ from nanojax.tokenizer import get_tokenizer
 
 checkpoint = "mid"
 compute_dtype = jnp.bfloat16
-max_tokens = 16
+max_tokens = 128
 seed = 42
 temperature = 0.6
 
@@ -35,61 +36,55 @@ max_seq_len = model_cfg.sequence_len * 2
 pad_token_id = tokenizer.encode_special("<|assistant_end|>")
 
 
-def generate(idx: list, model: GPT, max_seq_len: int, pad_token_id: int, rng, temperature:float= 0.6, compute_dtype:jnp.dtype=jnp.bfloat16):
-    # setup KV-caches for a single sample and up to 2x model context length
+@jax.jit
+def prefill(idx, actual_len, kv_cache):
+    logits, kv_cache = model.forward(idx, compute_dtype=compute_dtype, kv_cache=kv_cache)
+    # fix cache position to actual length (not padded length)
+    kv_cache = replace(kv_cache, pos=actual_len)
+    # take logit at actual_len - 1 (last non-padded position)
+    logits = jax.lax.dynamic_slice(logits, (0, actual_len - 1, 0), (1, 1, logits.shape[-1]))
+    return logits, kv_cache
+
+@jax.jit
+def generate_next_token(idx, mask, kv_cache, key):
+    logits, kv_cache = model.forward(idx, mask=mask, compute_dtype=compute_dtype, kv_cache=kv_cache)
+    logits = logits[:, -1:, :]
+    if temperature is not None:
+        pred = jax.random.categorical(key, logits / temperature)
+    else:
+        pred = jnp.argmax(logits, axis=-1)
+    return pred, kv_cache
+
+def generate(idx: list, rng):
     kv_cache = KVCache.init(
         batch_size=1,
         max_seq_len=max_seq_len,
-        n_layer=model.cfg.n_layer,
-        embed_dim=model.cfg.n_embed,
-        n_head=model.cfg.n_head,
-        n_kv_head=model.cfg.n_kv_head,
+        n_layer=model_cfg.n_layer,
+        embed_dim=model_cfg.n_embed,
+        n_head=model_cfg.n_head,
+        n_kv_head=model_cfg.n_kv_head,
         compute_dtype=compute_dtype,
     )
-    inputs = np.full((1, max_seq_len), pad_token_id, dtype=np.int32)
-    inputs[0, : len(idx)] = idx
-    inputs = jnp.asarray(inputs)
-    mask = jnp.arange(max_seq_len) < len(idx)
-
-    @jax.jit
-    def prefill(inputs, mask, kv_cache):
-        return model.forward(inputs, mask, compute_dtype=compute_dtype, kv_cache=kv_cache)
-
-    # prefill
-    logits, kv_cache = prefill(inputs, mask, kv_cache)
-    logits = logits[:, -1:, :]  # bsv -> bv
+    actual_len = len(idx)
+    # pad to max_seq_len for fixed shape compilation 
+    idx = idx + [pad_token_id] * (max_seq_len - len(idx))
+    idx = jnp.asarray(idx, dtype=jnp.int32)[None, :]
+    logits, kv_cache = prefill(idx, actual_len, kv_cache)
     if temperature is not None:
         rng, key = jax.random.split(rng)
         pred = jax.random.categorical(key, logits / temperature)
     else:
         pred = jnp.argmax(logits, axis=-1)
-    idx = jnp.concat((inputs[:, : len(idx)], pred), axis=1)
-
-    @jax.jit
-    def generate_next_token(idx, mask, kv_cache, key):
-        logits, kv_cache = model.forward(idx, mask=mask, compute_dtype=compute_dtype, kv_cache=kv_cache)
-        logits = logits[:, -1:, :]  # bsv -> b1v
-        if temperature is not None:
-            pred = jax.random.categorical(key, logits / temperature)
-        else:
-            pred = jnp.argmax(logits, axis=-1)
-        return pred, kv_cache
 
     for i in range(max_tokens):
         # our cached k,v are 0s for all positions we haven't filled yet up to our
         # pre-defined cache max_seq_len, so we need to mask these out.
-        s = idx.shape[1]
-        mask = jnp.arange(kv_cache.k.shape[2]) < kv_cache.pos + s
+        mask = jnp.arange(kv_cache.k.shape[2]) < kv_cache.pos + 1
         rng, key = jax.random.split(rng)
-        # async kick off next token generation
         next_token, kv_cache = generate_next_token(pred, mask, kv_cache, key)
         yield pred[0]
         pred = next_token
-        idx = jnp.concat((idx, pred), axis=1)
 
-
-# jit warmup
-generate(list(range(max_seq_len)), rng)
 
 user_start, user_end = tokenizer.encode_special("<|user_start|>"), tokenizer.encode_special("<|user_end|>")
 assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>"), tokenizer.encode_special("<|assistant_end|>")

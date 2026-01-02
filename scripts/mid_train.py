@@ -180,9 +180,8 @@ def train_step(idx, targets, model, state):
     loss = jax.lax.pmean(loss, "b")
     grads = jax.lax.pmean(grads, "b")
 
-    # step is accessed globally as it would trigger recompiles if passed to our JIT-ed step
-    updates, state = state.update(model, grads, lr_multiplier, step + 1)
-    model = jax.tree.map(jnp.subtract, model, updates)
+    updates, state = state.update(model, grads, lr_multiplier)
+    model = jax.tree.map(lambda m, u: (m - u).astype(m.dtype), model, updates)
     return model, state, loss
 
 # this time we tokenizer prompts using our chat template

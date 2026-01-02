@@ -1,0 +1,9 @@
+NANOJAX_BASE_DIR=/Users/salmanmohammadi/.cache/nanojax_d12 python -m scripts.chat_cli --checkpoint=mid
+
+User: 
+Assistant: Mitochondria are a type of cell in the mitochondria, and they are the cells that make up the cell's overall metabolic function.
+
+User: 
+Assistant: The theory of relativity is a profound theory that describes the relationship between the speed of light, the speed of light, and the geometry of spacetime. It was first proposed by Albert Einstein in 1916 and later developed by Albert Einstein in 1915.
+
+User: 

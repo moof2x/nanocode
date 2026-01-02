@@ -180,7 +180,7 @@ class GPT:
         # with the benefit of finer-grained control over mixed precision.
         
         # project our tokens into embedding space
-        x = self.wte[idx].astype(compute_dtype)
+        x = self.wte[idx]
         x = rms_norm(x)
 
         h = self.cfg.n_embed // self.cfg.n_head

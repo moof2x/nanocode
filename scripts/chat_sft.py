@@ -187,9 +187,9 @@ def train_step(idx, targets, model, state):
     grads = jax.lax.pmean(grads, "b")
     valid_tokens = jnp.sum(targets >= 0)
     total_tokens = jax.lax.psum(valid_tokens, "b")
-    # step is accessed globally as it would trigger recompiles if passed to our JIT-ed step
-    updates, state = state.update(model, grads, lr_multiplier, step + 1)
-    model = jax.tree.map(jnp.subtract, model, updates)
+
+    updates, state = state.update(model, grads, lr_multiplier)
+    model = jax.tree.map(lambda m, u: (m - u).astype(m.dtype), model, updates)
     return model, state, loss, total_tokens
 
 
