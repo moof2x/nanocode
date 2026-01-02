@@ -7,13 +7,13 @@ from datasets import load_dataset
 
 
 class MMLU:
-    letters = ('A', 'B', 'C', 'D')
-    groups = ('abstract_algebra', 'anatomy', 'astronomy', 'business_ethics', 'clinical_knowledge', 'college_biology', 'college_chemistry', 'college_computer_science', 'college_mathematics', 'college_medicine', 'college_physics', 'computer_security', 'conceptual_physics', 'econometrics', 'electrical_engineering', 'elementary_mathematics', 'formal_logic', 'global_facts', 'high_school_biology', 'high_school_chemistry', 'high_school_computer_science', 'high_school_european_history', 'high_school_geography', 'high_school_government_and_politics', 'high_school_macroeconomics', 'high_school_mathematics', 'high_school_microeconomics', 'high_school_physics', 'high_school_psychology', 'high_school_statistics', 'high_school_us_history', 'high_school_world_history', 'human_aging', 'human_sexuality', 'international_law', 'jurisprudence', 'logical_fallacies', 'machine_learning', 'management', 'marketing', 'medical_genetics', 'miscellaneous', 'moral_disputes', 'moral_scenarios', 'nutrition', 'philosophy', 'prehistory', 'professional_accounting', 'professional_law', 'professional_medicine', 'professional_psychology', 'public_relations', 'security_studies', 'sociology', 'us_foreign_policy', 'virology', 'world_religions')
+    letters = ("A", "B", "C", "D")
+    groups = ("abstract_algebra", "anatomy", "astronomy", "business_ethics", "clinical_knowledge", "college_biology", "college_chemistry", "college_computer_science", "college_mathematics", "college_medicine", "college_physics", "computer_security", "conceptual_physics", "econometrics", "electrical_engineering", "elementary_mathematics", "formal_logic", "global_facts", "high_school_biology", "high_school_chemistry", "high_school_computer_science", "high_school_european_history", "high_school_geography", "high_school_government_and_politics", "high_school_macroeconomics", "high_school_mathematics", "high_school_microeconomics", "high_school_physics", "high_school_psychology", "high_school_statistics", "high_school_us_history", "high_school_world_history", "human_aging", "human_sexuality", "international_law", "jurisprudence", "logical_fallacies", "machine_learning", "management", "marketing", "medical_genetics", "miscellaneous", "moral_disputes", "moral_scenarios", "nutrition", "philosophy", "prehistory", "professional_accounting", "professional_law", "professional_medicine", "professional_psychology", "public_relations", "security_studies", "sociology", "us_foreign_policy", "virology", "world_religions")
 
     def __init__(self, split: str, seed: int, **kwargs):
         super().__init__(**kwargs)
         # assert subset in ["all", "auxiliary_train"], f"subset {subset} must be all|auxiliary_train"
-        assert split in ["train", "validation", "dev", "test"], f"split {split} must be train|validation|dev|test"
+        # assert split in ["train", "validation", "dev", "test"], f"split {split} must be train|validation|dev|test"
         # if subset == "auxiliary_train":
         #     assert split == "train", "auxiliary_train must be split into train"
         # self.subset = subset
@@ -22,9 +22,9 @@ class MMLU:
         # if subset == "auxiliary_train":
         #     # I don't understand why but the auxiliary_train rows have some weird additional 'train' wrapper
         #     self.ds = self.ds.map(lambda row: row['train'], remove_columns=['train'])
-        self.ds = load_dataset("cais/mmlu", "auxiliary_train", split="train")
+        self.ds = load_dataset("cais/mmlu", "auxiliary_train", split=split)
         self.ds = self.ds.map(lambda row: row["train"], remove_columns=["train"])
-        self.ds = self.ds.shuffle(seed=seed)        
+        self.ds = self.ds.shuffle(seed=seed)
         self.length = len(self.ds)
 
     def __len__(self):
@@ -32,10 +32,10 @@ class MMLU:
 
     def __getitem__(self, idx: int):
         row = self.ds[idx]
-        question = row["question"] # the question text
-        choices = row["choices"] # the text of each choice
-        answer = row["answer"] # index of the answer, e.g. 0,1,2,3 (for A,B,C,D)
-        subject = row["subject"] # e.g. "college_biology", "college_chemistry", etc.
+        question = row["question"]  # the question text
+        choices = row["choices"]  # the text of each choice
+        answer = row["answer"]  # index of the answer, e.g. 0,1,2,3 (for A,B,C,D)
+        subject = row["subject"]  # e.g. "college_biology", "college_chemistry", etc.
         assert len(choices) == 4, "MMLU should have 4 choices"
         # create and return the Conversation object
         user_message = f"Multiple Choice question: {question}\n"
@@ -44,7 +44,7 @@ class MMLU:
         assistant_message = self.letters[answer]
         messages = [
             {"role": "user", "content": user_message},
-            {"role": "assistant", "content": assistant_message}
+            {"role": "assistant", "content": assistant_message},
         ]
         conversation = {
             "messages": messages,
@@ -52,4 +52,3 @@ class MMLU:
             # "letters": self.letters, # useful during evaluation, so we can narrow and clamp the assistant prediction to one of the letters
         }
         return conversation
-

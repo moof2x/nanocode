@@ -96,7 +96,7 @@ model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 last_step = False
 train_ds = TaskMixture([
     SmolTalk("train", seed), # 460K rows
-    Dolly(seed), # 10K rows
+    Dolly("train", seed), # 10K rows
     HHRLHF("train", seed), # 160K rows
     MMLU("train", seed) # 100K rows
 ], seed)

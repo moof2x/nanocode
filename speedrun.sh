@@ -15,6 +15,29 @@ rm -rf "$NANOJAX_BASE_DIR/tokenizer"
 python -m nanojax.dataset -n 16
 python -m scripts.tok_train --max_chars=2000000000
 python -m scripts.tok_eval
+
+python -u -m scripts.base_train \
+    --batch_size=128 \
+    --minibatch_size=32 \
+    --config=configs.d12 \
+    --accelerator_flops=918e12 \
+    --eval_every=500 \
+    --sample_every=500  2>&1 | tee base_log.txt
+
+python -u -m scripts.mid_train \
+    --batch_size=128 \
+    --minibatch_size=32 \
+    --accelerator_flops=918e12 \
+    --eval_every=500 \
+    --sample_every=500 2>&1 | tee mid_log.txt
+
+python -u -m scripts.chat_sft \
+    --batch_size=128 \
+    --minibatch_size=32 \
+    --accelerator_flops=918e12 \
+    --eval_every=500 \
+    --sample_every=500 2>&1 | tee chat_sf_log.txt
+
 exit 1
 # train a very small 4 layer model on the CPU
 # each optimization step processes a single sequence of 1024 tokens

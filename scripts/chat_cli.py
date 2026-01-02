@@ -3,7 +3,7 @@ import sys
 
 import jax
 import jax.numpy as jnp
-
+import numpy as np
 from nanojax.checkpointing import load_checkpoint, load_model_config
 from nanojax.common import get_base_dir
 from nanojax.gpt import GPT, KVCache
@@ -15,7 +15,7 @@ max_tokens = 16
 seed = 42
 temperature = 0.6
 
-exec(open(os.path.join('nanojax', 'configurator.py')).read()) # overrides from command line 
+exec(open(os.path.join("nanojax", "configurator.py")).read()) # overrides from command line
 command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
 print(command)
 
@@ -26,15 +26,14 @@ model_cfg = load_model_config(checkpoint_dir / "model.zarr")
 
 rng = jax.random.key(seed)
 
-model = GPT.init(
-    model_cfg,
-    rng
-)
+model = GPT.init(model_cfg, rng)
 model = load_checkpoint(checkpoint_dir / "model.zarr", model)
 
 max_seq_len = model_cfg.sequence_len * 2
+pad_token_id = tokenizer.encode_special("<|assistant_end|>")
 
-def generate(idx, rng):
+
+def generate(idx: list, rng):
     # setup KV-caches for a single sample and up to 2x model context length
     kv_cache = KVCache.init(
         batch_size=1,
@@ -43,31 +42,38 @@ def generate(idx, rng):
         embed_dim=model_cfg.n_embed,
         n_head=model_cfg.n_head,
         n_kv_head=model_cfg.n_kv_head,
-        compute_dtype=compute_dtype
+        compute_dtype=compute_dtype,
     )
-    idx = jnp.asarray(idx, dtype=jnp.int32)[None, :]
+    inputs = np.full((1, max_seq_len), pad_token_id, dtype=np.int32)
+    inputs[0, : len(idx)] = idx
+    inputs = jnp.asarray(inputs)
+    mask = jnp.arange(max_seq_len) < len(idx)
+
+    @jax.jit
+    def prefill(inputs, mask, kv_cache):
+        return model.forward(inputs, mask, compute_dtype=compute_dtype, kv_cache=kv_cache)
+
     # prefill
-    logits, kv_cache = model.forward(idx, compute_dtype=compute_dtype, kv_cache=kv_cache)
-    logits = logits[:, -1:, :] # bsv -> bv
+    logits, kv_cache = prefill(inputs, mask, kv_cache)
+    logits = logits[:, -1:, :]  # bsv -> bv
     if temperature is not None:
         rng, key = jax.random.split(rng)
         pred = jax.random.categorical(key, logits / temperature)
-    else: 
+    else:
         pred = jnp.argmax(logits, axis=-1)
-    idx = jnp.concat((idx, pred), axis=1)
-    
+    idx = jnp.concat((inputs[:, : len(idx)], pred), axis=1)
+
     @jax.jit
     def generate_next_token(idx, mask, kv_cache, key):
         logits, kv_cache = model.forward(idx, mask=mask, compute_dtype=compute_dtype, kv_cache=kv_cache)
-        logits = logits[:, -1:, :] # bsv -> b1v
+        logits = logits[:, -1:, :]  # bsv -> b1v
         if temperature is not None:
             pred = jax.random.categorical(key, logits / temperature)
-        else: 
-            pred =  jnp.argmax(logits, axis=-1)
+        else:
+            pred = jnp.argmax(logits, axis=-1)
         return pred, kv_cache
 
     for i in range(max_tokens):
-        # async kick off generation for the next token
         # our cached k,v are 0s for all positions we haven't filled yet up to our
         # pre-defined cache max_seq_len, so we need to mask these out.
         s = idx.shape[1]
@@ -78,10 +84,14 @@ def generate(idx, rng):
         yield pred[0]
         pred = next_token
         idx = jnp.concat((idx, pred), axis=1)
-        
+
+
+# jit warmup
+generate(list(range(max_seq_len)), rng)
 
 user_start, user_end = tokenizer.encode_special("<|user_start|>"), tokenizer.encode_special("<|user_end|>")
 assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>"), tokenizer.encode_special("<|assistant_end|>")
+
 
 tokens = []
 while True:
@@ -98,7 +108,6 @@ while True:
     tokens.append(user_end)
     tokens.append(assistant_start)
     print("\nAssistant: ", end="", flush=True)
-
     for token in generate(tokens, rng):
         tokens.append(token[0])
         if token[0] == assistant_end:
@@ -113,8 +122,3 @@ while True:
 
     rng, _ = jax.random.split(rng)
     print()
-    
-    
-
-    
-    
