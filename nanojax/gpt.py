@@ -84,7 +84,7 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_kv_head: int = 12
-    n_embed: int = 768
+    n_embed: int = 1024
 
 @register_dataclass
 @dataclass
@@ -128,7 +128,7 @@ class GPT:
     cfg: GPTConfig
 
     @staticmethod              
-    def init(cfg: GPTConfig, rng: jax.Array) -> "GPT":
+    def init(cfg: GPTConfig, rng: jax.Array, compute_dtype=jnp.bfloat16) -> "GPT":
         # random state must be explicitly managed in JAX by "splitting"
         # random keys. fold_in does this by splitting the base key based on
         # a given integer
@@ -140,7 +140,7 @@ class GPT:
 
         key = map(partial(jax.random.fold_in, rng), itertools.count())
         # mean 0, std 1 initialization for embedding layer
-        wte = jax.random.normal(next(key), (cfg.vocab_size, cfg.n_embed)) 
+        wte = jax.random.normal(next(key), (cfg.vocab_size, cfg.n_embed)).astype(compute_dtype) 
         h = []
         head_dim = cfg.n_embed // cfg.n_head
         for i in range(cfg.n_layer):

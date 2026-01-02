@@ -17,7 +17,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import requests
 
-from nanojax.common import get_base_dir
+from nanojax.common import get_base_dir, print0
 
 # -----------------------------------------------------------------------------
 # The specifics of the current pretraining dataset
@@ -62,12 +62,12 @@ def download_single_file(index: int):
     filename = index_to_filename(index)
     filepath = DATA_DIR / filename
     if filepath.exists():
-        print(f"Skipping {filepath} (already exists)")
+        print0(f"Skipping {filepath} (already exists)")
         return True
 
     # Construct the remote URL for this file
     url = f"{BASE_URL}/{filename}"
-    print(f"Downloading {filename}...")
+    print0(f"Downloading {filename}...")
 
     # Download with retries
     max_attempts = 5
@@ -83,21 +83,21 @@ def download_single_file(index: int):
                         f.write(chunk)
             # Move temp file to final location
             temp_path.rename(filepath)
-            print(f"Successfully downloaded {filename}")
+            print0(f"Successfully downloaded {filename}")
             return True
 
         except (requests.RequestException, IOError) as e:
-            print(f"Attempt {attempt}/{max_attempts} failed for {filename}: {e}")
+            print0(f"Attempt {attempt}/{max_attempts} failed for {filename}: {e}")
             # Clean up any partial files
             filepath.unlink(missing_ok=True)
             filepath.with_name(filepath.name + ".tmp").unlink(missing_ok=True)
             # Try a few times with exponential backoff: 2^attempt seconds
             if attempt < max_attempts:
                 wait_time = 2 ** attempt
-                print(f"Waiting {wait_time} seconds before retry...")
+                print0(f"Waiting {wait_time} seconds before retry...")
                 time.sleep(wait_time)
             else:
-                print(f"Failed to download {filename} after {max_attempts} attempts")
+                print0(f"Failed to download {filename} after {max_attempts} attempts")
                 return False
 
     return False
@@ -111,11 +111,11 @@ if __name__ == "__main__":
 
     num = MAX_SHARD + 1 if args.num_files == -1 else min(args.num_files, MAX_SHARD + 1)
     ids_to_download = list(range(num))
-    print(f"Downloading {len(ids_to_download)} shards using {args.num_workers} workers...")
-    print(f"Target directory: {DATA_DIR}")
+    print0(f"Downloading {len(ids_to_download)} shards using {args.num_workers} workers...")
+    print0(f"Target directory: {DATA_DIR}")
     with Pool(processes=args.num_workers) as pool:
         results = pool.map(download_single_file, ids_to_download)
 
     # Report results
     successful = sum(1 for success in results if success)
-    print(f"Done! Downloaded: {successful}/{len(ids_to_download)} shards to {DATA_DIR}")
+    print0(f"Done! Downloaded: {successful}/{len(ids_to_download)} shards to {DATA_DIR}")

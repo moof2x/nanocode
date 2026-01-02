@@ -7,33 +7,36 @@
 
 # all the setup stuff
 export OMP_NUM_THREADS=1
-export NANOJAX_BASE_DIR="$HOME/.cache/nanojax_d12"
+export NANOJAX_BASE_DIR="$HOME/.cache/nanojax_d20"
 mkdir -p $NANOJAX_BASE_DIR
 
 # train tokenizer on ~2B characters
 rm -rf "$NANOJAX_BASE_DIR/tokenizer"
-python -m nanojax.dataset -n 16
-python -m scripts.tok_train --max_chars=2000000000
-python -m scripts.tok_eval
+python -m nanojax.dataset -n 8
+python -m nanojax.dataset -n 240 &
+DATASET_DOWNLOAD_PID=$1
 
+python -m scripts.tok_train --max_chars=2000000000 --vocab_size=65536
+python -m scripts.tok_eval
+exit 1
 python -u -m scripts.base_train \
-    --batch_size=64 \
-    --minibatch_size=32 \
+    --batch_size=32 \
+    --minibatch_size=4 \
     --config=configs.d12 \
     --accelerator_flops=918e12 \
     --eval_every=500 \
     --sample_every=500  2>&1 | tee base_log.txt
 
 python -u -m scripts.mid_train \
-    --batch_size=64 \
-    --minibatch_size=32 \
+    --batch_size=32 \
+    --minibatch_size=3 \
     --accelerator_flops=918e12 \
     --eval_every=500 \
     --sample_every=500 2>&1 | tee mid_log.txt
 
 python -u -m scripts.chat_sft \
-    --batch_size=64 \
-    --minibatch_size=32 \
+    --batch_size=32 \
+    --minibatch_size=4 \
     --accelerator_flops=918e12 \
     --eval_every=500 \
     --sample_every=500 2>&1 | tee chat_sf_log.txt

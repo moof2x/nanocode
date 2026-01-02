@@ -5,6 +5,7 @@ import jax
 import jax.numpy as jnp
 from jax.tree_util import register_dataclass
 
+from nanojax.common import print0
 from nanojax.gpt import GPT, Block
 
 
@@ -41,7 +42,11 @@ class Muon:
         adamw_nu = (model.wte * 0.0, model.lm_head * 0.0)
         mu = jax.tree.map(lambda p: p * 0.0, model.h)
 
-        return Muon(mu=mu, adamw_mu=adamw_mu, adamw_nu=adamw_nu, **kwargs)
+        optimizer = Muon(mu=mu, adamw_mu=adamw_mu, adamw_nu=adamw_nu, **kwargs)
+        # lr AdamW scaling
+        dmodel_lr_scale = (model.cfg.n_embed / 768) ** -0.5
+        print0(f"Scaling the LR for the AdamW parameters ∝1/√({model.cfg.n_embed}/768) = {dmodel_lr_scale:.6f}")
+        return replace(optimizer, wte_lr=optimizer.wte_lr * dmodel_lr_scale, lm_head_lr=optimizer.lm_head_lr * dmodel_lr_scale)
 
     def update(self, model: GPT, grads: GPT, lr_multiplier: float, step: int):
         """

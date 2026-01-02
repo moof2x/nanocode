@@ -14,7 +14,7 @@ import trackio
 
 from nanojax import configs
 from nanojax.checkpointing import load_checkpoint, load_model_config, save_checkpoint
-from nanojax.common import get_base_dir
+from nanojax.common import get_base_dir, print0
 from nanojax.dataloader import tokenizing_data_loader
 from nanojax.eval import evaluate_bpb
 from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
@@ -51,22 +51,24 @@ profile_every = 500
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["compute_dtype"]
 exec(open(os.path.join('nanojax', 'configurator.py')).read()) # overrides from command line 
 user_config = {k: globals()[k] for k in config_keys} 
-command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
-print(command)
 for k, v in user_config.items():
-    print(f"  {k}: {v}")
+    print0(f"  {k}: {v}")
 
 grad_accm_steps = batch_size // minibatch_size
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
 
-tokenizer = get_tokenizer()
-token_bytes = get_token_bytes()
-vocab_size = tokenizer.get_vocab_size()
 base_dir = get_base_dir()
 base_checkpoint_dir = base_dir / "base_checkpoints"
 checkpoint_dir = base_dir / "mid_checkpoints"
 config = load_model_config(base_checkpoint_dir / "model.zarr")
 rng = jax.random.key(seed)
+
+command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
+print0(f"NANOJAX_BASE_DIR={base_dir} {command}")
+
+tokenizer = get_tokenizer()
+token_bytes = get_token_bytes()
+vocab_size = tokenizer.get_vocab_size()
 
 max_seq_len = config.sequence_len
 eval_tokens = batch_size * max_seq_len* 20 # magic number from nanochat
@@ -82,11 +84,11 @@ model = GPT.init(
     rng
 )
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
-print(f"{num_params} model parameters")
-print("="*20)
+print0(f"{num_params} model parameters")
+print0("="*20)
 
 num_flops_per_token = estimate_flops(model)
-print(f"Estimated FLOPs per token: {num_flops_per_token}")
+print0(f"Estimated FLOPs per token: {num_flops_per_token}")
 
 state = Muon.init(model, eps=eps,  wd=wd, wte_lr=wte_lr, lm_head_lr=lm_head_lr, lr=lr)
 grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
@@ -221,14 +223,14 @@ while True:
     tkps = int(x.size // dt)
     total_training_time += dt
 
-    print(f"Step: {step} ({pct_done:.2f}%)| Loss: {loss:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f} | lr_multiplier: {lr_multiplier:.3f}")
+    print0(f"Step: {step} ({pct_done:.2f}%)| Loss: {loss:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f} | lr_multiplier: {lr_multiplier:.3f}")
     log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu, "lr_multiplier": lr_multiplier}
     
     if (step % profile_every == 0):
         memory_stats = jax.devices()[0].memory_stats()
         used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
         log_dict["peak_bytes_reserved"] = used
-        print(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
+        print0(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
 
     if (step % sample_every == 0) or last_step:
         for idx in prompt_idx:
@@ -237,13 +239,13 @@ while True:
                 logits = logits[:, -1, :] # bsv -> bv
                 pred = jnp.argmax(logits, axis=-1, keepdims=True)
                 idx = jnp.concat([idx, pred], axis=1)
-            print(tokenizer.decode(idx[0]))
+            print0(tokenizer.decode(idx[0]))
 
     if (step % eval_every == 0) or last_step:
         d0 = time.perf_counter()
         eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size) 
         val_bpb = evaluate_bpb(model, get_val_dataloader(), eval_steps, token_bytes, compute_dtype, mesh)
-        print(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
+        print0(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
         log_dict["val/bpb"] = val_bpb
 
     step += 1 
@@ -251,9 +253,9 @@ while True:
     if (num_steps > 0 and step >= num_steps) or last_step:
         break
 
-print(f"Total training time: {(total_training_time/60):.2f}min")
+print0(f"Total training time: {(total_training_time/60):.2f}min")
 save_checkpoint(checkpoint_dir / "model.zarr", model)
 save_checkpoint(checkpoint_dir / "state.zarr", state) 
-print(f"Model (model.zarr) and optimizer state (state.zarr) checkpoints saved to {checkpoint_dir}.")
+print0(f"Model (model.zarr) and optimizer state (state.zarr) checkpoints saved to {checkpoint_dir}.")
 trackio.finish()
 

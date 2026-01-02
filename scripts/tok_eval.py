@@ -2,6 +2,7 @@
 Evaluate compression ratio of the tokenizer.
 """
 
+from nanojax.common import print0
 from nanojax.dataset import parquets_iter_batched
 from nanojax.tokenizer import RustBPETokenizer, get_tokenizer
 
@@ -195,19 +196,19 @@ RED = '\033[91m'
 RESET = '\033[0m'
 
 # Print vocab sizes
-print("--tok_eval.py--")
-print(f"\nVocab sizes:")
-print(f"GPT-2: {vocab_sizes['gpt2']}")
-print(f"GPT-4: {vocab_sizes['gpt4']}")
-print(f"Ours: {vocab_sizes['ours']}")
+print0("--tok_eval.py--")
+print0(f"\nVocab sizes:")
+print0(f"GPT-2: {vocab_sizes['gpt2']}")
+print0(f"GPT-4: {vocab_sizes['gpt4']}")
+print0(f"Ours: {vocab_sizes['ours']}")
 
 def print_comparison(baseline_name, baseline_results, ours_results, all_text):
     """Print comparison table between baseline tokenizer and ours."""
-    print(f"\nComparison with {baseline_name}:")
-    print("=" * 95)
-    print(f"{'Text Type':<10} {'Bytes':<8} {baseline_name:<15} {'Ours':<15} {'Relative':<12} {'Better':<10}")
-    print(f"{'':10} {'':8} {'Tokens':<7} {'Ratio':<7} {'Tokens':<7} {'Ratio':<7} {'Diff %':<12}")
-    print("-" * 95)
+    print0(f"\nComparison with {baseline_name}:")
+    print0("=" * 95)
+    print0(f"{'Text Type':<10} {'Bytes':<8} {baseline_name:<15} {'Ours':<15} {'Relative':<12} {'Better':<10}")
+    print0(f"{'':10} {'':8} {'Tokens':<7} {'Ratio':<7} {'Tokens':<7} {'Ratio':<7} {'Diff %':<12}")
+    print0("-" * 95)
 
     for name, text in all_text:
         baseline_data = baseline_results[name]
@@ -231,7 +232,7 @@ def print_comparison(baseline_name, baseline_results, ours_results, all_text):
             better = "Tie"
             diff_color = ""
 
-        print(f"{name:<10} {baseline_data['bytes']:<8} "
+        print0(f"{name:<10} {baseline_data['bytes']:<8} "
               f"{baseline_color}{baseline_data['tokens']:<7}{RESET} "
               f"{baseline_color}{baseline_data['ratio']:<7.2f}{RESET} "
               f"{ours_color}{ours_data['tokens']:<7}{RESET} "

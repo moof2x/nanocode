@@ -5,6 +5,11 @@ from pathlib import Path
 import jax
 
 
+def print0(s="", **kwargs):
+    if jax.process_index() == 0:
+        print(s, **kwargs)
+
+
 def get_base_dir() -> Path:
     # co-locate nanojax intermediates with other cached data in ~/.cache (by default)
     if os.environ.get("NANOJAX_BASE_DIR"):

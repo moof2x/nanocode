@@ -13,7 +13,7 @@ import time
 import numpy as np
 import zarr
 
-from nanojax.common import get_base_dir
+from nanojax.common import get_base_dir, print0
 from nanojax.dataset import parquets_iter_batched
 from nanojax.tokenizer import RustBPETokenizer
 
@@ -25,9 +25,9 @@ parser.add_argument('--max_chars', type=int, default=10_000_000_000, help='Maxim
 parser.add_argument('--doc_cap', type=int, default=10_000, help='Maximum characters per document (default: 10,000)')
 parser.add_argument('--vocab_size', type=int, default=50304, help='Vocabulary size (default: 50304, GPT2-small)')
 args = parser.parse_args()
-print(f"max_chars: {args.max_chars:,}")
-print(f"doc_cap: {args.doc_cap:,}")
-print(f"vocab_size: {args.vocab_size:,}")
+print0(f"max_chars: {args.max_chars:,}")
+print0(f"doc_cap: {args.doc_cap:,}")
+print0(f"vocab_size: {args.vocab_size:,}")
 
 # -----------------------------------------------------------------------------
 # Text iterator
@@ -56,7 +56,7 @@ t0 = time.time()
 tokenizer = RustBPETokenizer.train_from_iterator(text_iter, args.vocab_size)
 t1 = time.time()
 train_time = t1 - t0
-print(f"Training time: {train_time:.2f}s")
+print0(f"Training time: {train_time:.2f}s")
 
 # -----------------------------------------------------------------------------
 # Save the tokenizer to disk
@@ -93,7 +93,7 @@ for token_id in range(vocab_size):
 token_bytes = np.array(token_bytes, dtype=np.int32)
 token_bytes_path = tokenizer_dir / "token_bytes.zarr" 
 zarr.save(token_bytes_path, token_bytes)
-print(f"Saved token_bytes to {token_bytes_path}")
+print0(f"Saved token_bytes to {token_bytes_path}")
 
 
 # # Log to report

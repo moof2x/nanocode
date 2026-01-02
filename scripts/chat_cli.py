@@ -4,8 +4,9 @@ import sys
 import jax
 import jax.numpy as jnp
 import numpy as np
+
 from nanojax.checkpointing import load_checkpoint, load_model_config
-from nanojax.common import get_base_dir
+from nanojax.common import get_base_dir, print0
 from nanojax.gpt import GPT, KVCache
 from nanojax.tokenizer import get_tokenizer
 
@@ -16,13 +17,14 @@ seed = 42
 temperature = 0.6
 
 exec(open(os.path.join("nanojax", "configurator.py")).read()) # overrides from command line
-command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
-print(command)
 
 tokenizer = get_tokenizer()
 base_dir = get_base_dir()
 checkpoint_dir = base_dir / f"{checkpoint}_checkpoints"
 model_cfg = load_model_config(checkpoint_dir / "model.zarr")
+
+command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
+print0(f"NANOJAX_BASE_DIR={base_dir} {command}")
 
 rng = jax.random.key(seed)
 
@@ -33,15 +35,15 @@ max_seq_len = model_cfg.sequence_len * 2
 pad_token_id = tokenizer.encode_special("<|assistant_end|>")
 
 
-def generate(idx: list, rng):
+def generate(idx: list, model: GPT, max_seq_len: int, pad_token_id: int, rng, temperature:float= 0.6, compute_dtype:jnp.dtype=jnp.bfloat16):
     # setup KV-caches for a single sample and up to 2x model context length
     kv_cache = KVCache.init(
         batch_size=1,
         max_seq_len=max_seq_len,
-        n_layer=model_cfg.n_layer,
-        embed_dim=model_cfg.n_embed,
-        n_head=model_cfg.n_head,
-        n_kv_head=model_cfg.n_kv_head,
+        n_layer=model.cfg.n_layer,
+        embed_dim=model.cfg.n_embed,
+        n_head=model.cfg.n_head,
+        n_kv_head=model.cfg.n_kv_head,
         compute_dtype=compute_dtype,
     )
     inputs = np.full((1, max_seq_len), pad_token_id, dtype=np.int32)
@@ -98,7 +100,7 @@ while True:
     try:
         user_input = input("\nUser: ").strip()
     except (EOFError, KeyboardInterrupt):
-        print("\nGoodbye!")
+        print0("\nGoodbye!")
         break
     if not user_input:
         continue
@@ -107,18 +109,18 @@ while True:
     tokens.extend(tokenizer.encode(user_input))
     tokens.append(user_end)
     tokens.append(assistant_start)
-    print("\nAssistant: ", end="", flush=True)
+    print0("\nAssistant: ", end="", flush=True)
     for token in generate(tokens, rng):
         tokens.append(token[0])
         if token[0] == assistant_end:
             break
-        print(tokenizer.decode(token), end="", flush=True)
+        print0(tokenizer.decode(token), end="", flush=True)
 
     if token[0] != assistant_end:
         tokens.append(assistant_end)
     if len(tokens) > max_seq_len:
-        print(f"Max sequence len {max_seq_len} exceeded. Goodbye!")
+        print0(f"Max sequence len {max_seq_len} exceeded. Goodbye!")
         break
 
     rng, _ = jax.random.split(rng)
-    print()
+    print0()
