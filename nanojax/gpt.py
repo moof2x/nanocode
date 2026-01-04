@@ -83,7 +83,7 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_kv_head: int = 12
-    n_embed: int = 1024
+    n_embed: int = 768
 
 @register_dataclass
 @dataclass
@@ -155,7 +155,7 @@ class GPT:
             )
             h.append(Block(attn=attn, mlp=mlp))
 
-        lm_head = jnp.random.normal(next(key), shape=(cfg.n_embed, cfg.vocab_size)) * 0.001
+        lm_head = jax.random.normal(next(key), shape=(cfg.n_embed, cfg.vocab_size)) * 0.001
         return GPT(
             wte=wte,
             h=h,
