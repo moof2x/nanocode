@@ -87,7 +87,6 @@ model = GPT.init(
     
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
 print0(f"{num_params} model parameters")
-
 if num_steps < 0:
     total_tokens = num_params * 20
     num_steps = math.ceil(total_tokens / max_seq_len / (batch_size * world_size)) + 1
@@ -147,10 +146,11 @@ def train_step(idx, targets, model, state):
 
     # grad norm clipping
     global_norm = jnp.sqrt(jax.tree.reduce(operator.add, jax.tree.map(lambda g: jnp.sum(jax.lax.square(g)), grads)))
-    grads = jax.tree.map(lambda g: g * jnp.minimum(1.0, grad_clip / (global_norm + 1e-6)), grads)
-    
+    grad_scale_value = jnp.minimum(1.0, grad_clip / (global_norm + 1e-6))
+    grads = jax.tree.map(lambda g: g * grad_scale_value, grads)
+        
     updates, state = state.update(model, grads, lr_multiplier)
-    model = jax.tree.map(lambda m, u: (m - u).astype(m.dtype), model, updates)
+    model = jax.tree.map(jnp.subtract, model, updates)
     return model, state, loss
 
 prompts = [
@@ -185,28 +185,27 @@ while True:
     print0(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | | tkps: {tkps} | mfu: {mfu:.2f} | min ETA: {eta:.1f} min | lr_multiplier: {lr_multiplier:.3f}")
     log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu,  "lr_multiplier": lr_multiplier}
 
-    if (step % profile_every == 0):
+    if (step % profile_every == 0) or last_step:
         memory_stats = jax.devices()[0].memory_stats() or {}
         used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
         log_dict["peak_bytes_reserved"] = used
         print0(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
 
+    if (step % sample_every == 0) or last_step:
+        for idx in prompt_idx:
+            for i in range(16):
+                logits, _ = model.forward(idx, compute_dtype=compute_dtype)
+                logits = logits[:, -1, :] # bsv -> bv
+                pred = jnp.argmax(logits, axis=-1, keepdims=True)
+                idx = jnp.concat([idx, pred], axis=1)
+            print0("\t" + tokenizer.decode(idx[0]))
 
-    # if (step % sample_every == 0) or last_step:
-    #     for idx in prompt_idx:
-    #         for i in range(16):
-    #             logits, _ = model.forward(idx, compute_dtype=compute_dtype)
-    #             logits = logits[:, -1, :] # bsv -> bv
-    #             pred = jnp.argmax(logits, axis=-1, keepdims=True)
-    #             idx = jnp.concat([idx, pred], axis=1)
-    #         print0("\t" + tokenizer.decode(idx[0]))
-
-    # if (step % eval_every == 0) or last_step:
-    #     d0 = time.perf_counter()
-    #     eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size) 
-    #     val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype, mesh)
-    #     print0(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
-    #     log_dict["val/bpb"] = val_bpb
+    if (step % eval_every == 0) or last_step:
+        d0 = time.perf_counter()
+        eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size) 
+        val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype, mesh)
+        print0(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
+        log_dict["val/bpb"] = val_bpb
 
     step += 1 
     trackio.log(log_dict)

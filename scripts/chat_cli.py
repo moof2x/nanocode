@@ -37,7 +37,7 @@ pad_token_id = tokenizer.encode_special("<|assistant_end|>")
 
 
 @jax.jit
-def prefill(idx, actual_len, kv_cache):
+def prefill(model, idx, actual_len, kv_cache):
     logits, kv_cache = model.forward(idx, compute_dtype=compute_dtype, kv_cache=kv_cache)
     # fix cache position to actual length (not padded length)
     kv_cache = replace(kv_cache, pos=actual_len)
@@ -46,7 +46,7 @@ def prefill(idx, actual_len, kv_cache):
     return logits, kv_cache
 
 @jax.jit
-def generate_next_token(idx, mask, kv_cache, key):
+def generate_next_token(model, idx, mask, kv_cache, key):
     logits, kv_cache = model.forward(idx, mask=mask, compute_dtype=compute_dtype, kv_cache=kv_cache)
     logits = logits[:, -1:, :]
     if temperature is not None:
@@ -66,10 +66,10 @@ def generate(idx: list, rng):
         compute_dtype=compute_dtype,
     )
     actual_len = len(idx)
-    # pad to max_seq_len for fixed shape compilation 
+    # pad to max_seq_len for fixed shape compilation
     idx = idx + [pad_token_id] * (max_seq_len - len(idx))
     idx = jnp.asarray(idx, dtype=jnp.int32)[None, :]
-    logits, kv_cache = prefill(idx, actual_len, kv_cache)
+    logits, kv_cache = prefill(model, idx, actual_len, kv_cache)
     if temperature is not None:
         rng, key = jax.random.split(rng)
         pred = jax.random.categorical(key, logits / temperature)
@@ -81,7 +81,7 @@ def generate(idx: list, rng):
         # pre-defined cache max_seq_len, so we need to mask these out.
         mask = jnp.arange(kv_cache.k.shape[2]) < kv_cache.pos + 1
         rng, key = jax.random.split(rng)
-        next_token, kv_cache = generate_next_token(pred, mask, kv_cache, key)
+        next_token, kv_cache = generate_next_token(model, pred, mask, kv_cache, key)
         yield pred[0]
         pred = next_token
 

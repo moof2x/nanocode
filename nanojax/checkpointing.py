@@ -19,7 +19,6 @@ def save_checkpoint(filename: Path, state: GPT | Muon):
         root.attrs["config"] = state.cfg
     state_dict = [(p, a) for p, a in state_dict if "step" not in jax.tree_util.keystr(p)]
     for path, arr in state_dict:
-        print(jax.tree_util.keystr(path), jax.typeof(arr))
         root[jax.tree_util.keystr(path)] = np.asarray(arr, dtype=np.float32)
 
 def load_model_config(filename: Path) -> GPTConfig:

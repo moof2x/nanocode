@@ -181,7 +181,7 @@ def train_step(idx, targets, model, state):
     grads = jax.lax.pmean(grads, "b")
 
     updates, state = state.update(model, grads, lr_multiplier)
-    model = jax.tree.map(lambda m, u: (m - u).astype(m.dtype), model, updates)
+    model = jax.tree.map(jnp.subtract, model, updates)
     return model, state, loss
 
 # this time we tokenizer prompts using our chat template
@@ -225,7 +225,7 @@ while True:
     print0(f"Step: {step} ({pct_done:.2f}%)| Loss: {loss:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f} | lr_multiplier: {lr_multiplier:.3f}")
     log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu, "lr_multiplier": lr_multiplier}
     
-    if (step % profile_every == 0):
+    if (step % profile_every == 0) or last_step:
         memory_stats = jax.devices()[0].memory_stats()
         used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
         log_dict["peak_bytes_reserved"] = used

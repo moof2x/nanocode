@@ -46,7 +46,6 @@ class KVCache:
 
     def update(self, k: jax.Array, v: jax.Array, layer_idx: int):
         # k,v: bskh
-        s = k.shape[1]
         # store our updated kv cache values
         k = jax.lax.dynamic_update_slice(self.k, k[None], (layer_idx, 0, self.pos, 0, 0))
         v = jax.lax.dynamic_update_slice(self.v, v[None], (layer_idx, 0, self.pos, 0, 0))
@@ -140,7 +139,7 @@ class GPT:
 
         key = map(partial(jax.random.fold_in, rng), itertools.count())
         # mean 0, std 1 initialization for embedding layer
-        wte = jax.random.normal(next(key), (cfg.vocab_size, cfg.n_embed)).astype(compute_dtype) 
+        wte = jax.random.normal(next(key), (cfg.vocab_size, cfg.n_embed))
         h = []
         head_dim = cfg.n_embed // cfg.n_head
         for i in range(cfg.n_layer):
@@ -170,25 +169,19 @@ class GPT:
     def forward(self, idx: jax.Array, mask: jax.Array = None, compute_dtype: jnp.dtype = jnp.bfloat16, kv_cache: KVCache = None):
         cfg = self.cfg        
         b, s =  idx.shape
-        # one slight downside to working in pure JAX is that we don't have a nice
-        # amp autocast context manager like in torch to automatically handle
-        # mixed precision.
-        # (recall: mixed precision means we keep model weights and gradients in fp32
-        # and perform gradient updates in fp32, but we use bf16 for our forward pass
-        # for improved speed)
-        # This means we have to manually handle precision everywhere but it comes
-        # with the benefit of finer-grained control over mixed precision.
         
         # project our tokens into embedding space
-        x = self.wte[idx]
+        x = self.wte.astype(compute_dtype)[idx]
         x = rms_norm(x)
 
         h = self.cfg.n_embed // self.cfg.n_head
+        if mask is None:
+            mask = jnp.tril(jnp.ones((s, s), dtype=jnp.bool_))[None, None, ...]
+            
         # prepare our rotary position embeddings once
         channel_range = jnp.arange(0, h, 2, dtype=jnp.float32)
         inv_freq = 1.0 / (1e4 ** (channel_range / h))
-        is_causal = mask is None
-        
+    
         # token sequence positions: 0,1,2,...,s
         if kv_cache is not None:
             # if we're decoding we only need to generate embeddings for positions we
@@ -210,28 +203,42 @@ class GPT:
             attn_in = rms_norm(x)
 
             ### causal self attention
+            # q: bse -> bsQ -> bsqh
             q = jnp.einsum("bse,eQ->bsQ", attn_in, attn.c_q.astype(compute_dtype)).reshape(b, s, cfg.n_head, h)
 
             # k,v: bse -> bsK -> bskh
             k = jnp.einsum("bse,eK->bsK", attn_in, attn.c_k.astype(compute_dtype)).reshape(b, s, cfg.n_kv_head, h)
             v = jnp.einsum("bse,eK->bsK", attn_in, attn.c_v.astype(compute_dtype)).reshape(b, s, cfg.n_kv_head, h)
         
-            # apply rotary embeddings (on-the-fly) to our queries, keys, and values
+            # apply rotary embeddings 
             q = apply_rope(q, cos, sin)
             k = apply_rope(k, cos, sin)
 
+            # # QK norm
+            q = rms_norm(q)
+            k = rms_norm(k)
+            
             if kv_cache is not None:
                 k, v, kv_cache = kv_cache.update(k, v, i)
 
-            # QK norm
-            q = rms_norm(q)
-            k = rms_norm(k)
+            # jax.nn.dot_product_attention will internally transpose which is slow
+            # bsqh -> bqsh
+            q = q.transpose(0, 2, 1, 3)
+            k = k.transpose(0, 2, 1, 3)
+            v = v.transpose(0, 2, 1, 3)
 
-            # scaled dot product attention
-            attn_out = jax.nn.dot_product_attention(q, k, v, is_causal=is_causal, mask=mask)
+            scale = 1.0 / jnp.sqrt(h)
+
+            attn_weights = jnp.einsum("bnsh,bnth->bnst", q * scale, k)
+            attn_weights = jnp.where(mask, attn_weights, -jnp.inf)
+            attn_weights = jax.nn.softmax(attn_weights.astype(jnp.float32), axis=-1).astype(compute_dtype)
+
+            # matmul → einsum
+            attn_out = jnp.einsum("bnst,bnth->bsnh", attn_weights, v)
+
+            # attn_out = attn_out.transpose(0, 2, 1, 3)
             attn_out = attn_out.reshape(b, s, cfg.n_embed)
             attn_out = jnp.einsum("bse,eE->bsE", attn_out, attn.c_proj.astype(compute_dtype))
-
             # residual connection with the pre-norm block input
             x = x + attn_out
             
@@ -246,15 +253,15 @@ class GPT:
             kv_cache = kv_cache.forward_pos(s)
             
         x = rms_norm(x)
+        
         # perform logit softcapping
         softcap = 15
         logits = jnp.einsum("bse,ev->bsv", x, self.lm_head.astype(compute_dtype))
-        # note: we CE in fp32, so no mixed precision here
         logits = softcap * jax.nn.tanh(logits / softcap)
-        # i hate runtime-defined function signatures but this is the price we pay for JIT - all state is immutable
-        return logits.astype(jnp.float32), kv_cache 
 
-def estimate_flops(model: GPT):
+        return logits, kv_cache
+
+def estimate_flops(model: GPT) -> float:
     num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
     wte_params = model.wte.size
     l, h, q, t = model.cfg.n_layer, model.cfg.n_head, model.cfg.n_embed // model.cfg.n_head, model.cfg.sequence_len
@@ -265,7 +272,7 @@ def estimate_flops(model: GPT):
 def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT, ignore_idx: int=-1,  compute_dtype: jnp.dtype=jnp.bfloat16, reduce: bool=True) -> jax.Array:
     logits, _ = model.forward(idx, compute_dtype=compute_dtype)
     # cross entropy loss using logsumexp
-    logsumexp = jax.nn.logsumexp(logits, axis=-1)
+    logsumexp = jax.nn.logsumexp(logits.astype(jnp.float32), axis=-1)
     valid_targets = jnp.not_equal(targets, ignore_idx)
     safe_targets = jnp.where(valid_targets, targets, 0)
     loss = -jnp.take_along_axis(logits, safe_targets[:, :, None], axis=-1).squeeze(-1) + logsumexp
