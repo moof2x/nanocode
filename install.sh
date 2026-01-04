@@ -9,9 +9,5 @@ export PATH="$HOME/.local/bin:$PATH"
 source .venv/bin/activate
 # install the repo dependencies
 uv sync --extra tpu
-# Install Rust / Cargo
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-uv run maturin develop --release --manifest-path rustbpe/Cargo.toml
 export NANOCHAT_BASE_DIR="$HOME/.cache/nanochat"
 mkdir -p $NANOCHAT_BASE_DIR

@@ -8,6 +8,7 @@ dependencies = [
     "datasets>=4.4.1",
     "maturin>=1.9.6",
     "pyarrow>=22.0.0",
+    "rustbpe>=0.1.0",
     "tiktoken>=0.12.0",
     "trackio>=0.9.1",
     "zarr>=3.1.3",
@@ -17,16 +18,6 @@ dependencies = [
 cuda = ["jax[cuda12]"]
 cpu = ["jax"]
 tpu = ["jax[tpu]", "libtpu"]
-
-[build-system]
-requires = ["maturin>=1.7,<2.0"]
-build-backend = "maturin"
-
-[tool.maturin]
-module-name = "rustbpe"
-bindings = "pyo3"
-python-source = "."
-manifest-path = "rustbpe/Cargo.toml"
 
 [tool.uv]
 find-links = [
