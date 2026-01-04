@@ -128,37 +128,34 @@ class GPT:
 
     @staticmethod              
     def init(cfg: GPTConfig, rng: jax.Array, compute_dtype=jnp.bfloat16) -> "GPT":
+        n_embed, n_head, n_kv_head = cfg.n_embed, cfg.n_head, cfg.n_kv_head
+        head_dim = cfg.n_embed // cfg.n_head
         # random state must be explicitly managed in JAX by "splitting"
         # random keys. fold_in does this by splitting the base key based on
         # a given integer
-        def init_linear(rng, shape):
-            # fan-in-fan-out initialization https://arxiv.org/pdf/2310.17813
-            fan_in, fan_out = shape
-            std = 1.0 / math.sqrt(fan_in) * min(1.0, math.sqrt(fan_out / fan_in))
-            return jax.random.normal(rng, shape) * std
 
         key = map(partial(jax.random.fold_in, rng), itertools.count())
         # mean 0, std 1 initialization for embedding layer
-        wte = jax.random.normal(next(key), (cfg.vocab_size, cfg.n_embed))
+        wte = jax.random.normal(next(key), (cfg.vocab_size, n_embed))
         h = []
-        head_dim = cfg.n_embed // cfg.n_head
+        
         for i in range(cfg.n_layer):
+            s = 3**0.5 * n_embed**-0.5
             # modded-nanogpt suggestion: zero out c_proj in attn and mlp layers
             attn = Attention(
-                c_q=init_linear(next(key), (cfg.n_embed, cfg.n_head * head_dim)),
-                c_k=init_linear(next(key), (cfg.n_embed, cfg.n_kv_head * head_dim)),
-                c_v=init_linear(next(key), (cfg.n_embed, cfg.n_kv_head * head_dim)),
+                c_q=jax.random.uniform(next(key), shape=(n_embed, n_head * head_dim), minval=-s, maxval=s),
+                c_k=jax.random.uniform(next(key), shape=(n_embed, n_kv_head * head_dim), minval=-s, maxval=s),
+                c_v=jax.random.uniform(next(key), shape=(n_embed, n_kv_head * head_dim), minval=-s, maxval=s),
                 c_proj = jnp.zeros((cfg.n_embed, cfg.n_embed))
             )
     
             mlp = MLP(
-                c_fc=init_linear(next(key), (cfg.n_embed, 4 * cfg.n_embed)),
+                c_fc=jax.random.uniform(next(key), shape=(n_embed, 4 * n_embed), minval=-s, maxval=s),
                 c_proj=jnp.zeros((4 * cfg.n_embed, cfg.n_embed))
             )
             h.append(Block(attn=attn, mlp=mlp))
 
-        # modded-nanogpt suggestion: zero out classifier weights
-        lm_head = jnp.zeros((cfg.n_embed, cfg.vocab_size))
+        lm_head = jnp.random.normal(next(key), shape=(cfg.n_embed, cfg.vocab_size)) * 0.001
         return GPT(
             wte=wte,
             h=h,
