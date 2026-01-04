@@ -14,7 +14,7 @@ import trackio
 
 from nanojax import configs
 from nanojax.checkpointing import load_checkpoint, load_model_config, save_checkpoint
-from nanojax.common import get_base_dir, print0
+from nanojax.common import get_base_dir, print0, setup_logging
 from nanojax.dataloader import tokenizing_data_loader
 from nanojax.eval import evaluate_bpb
 from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
@@ -49,15 +49,15 @@ eval_every = 50
 profile_every = 500
 
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["compute_dtype"]
-exec(open(os.path.join('nanojax', 'configurator.py')).read()) # overrides from command line 
-user_config = {k: globals()[k] for k in config_keys} 
+exec(open(os.path.join('nanojax', 'configurator.py')).read()) # overrides from command line
+base_dir = get_base_dir()
+setup_logging(base_dir / "mid_log.txt")
+user_config = {k: globals()[k] for k in config_keys}
 for k, v in user_config.items():
     print0(f"  {k}: {v}")
 
 grad_accm_steps = batch_size // minibatch_size
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
-
-base_dir = get_base_dir()
 base_checkpoint_dir = base_dir / "base_checkpoints"
 checkpoint_dir = base_dir / "mid_checkpoints"
 config = load_model_config(base_checkpoint_dir / "model.zarr")
