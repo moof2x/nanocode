@@ -134,7 +134,7 @@ def dataloader(dataset, B, T, tokenizer):
     while True:
         for i in range(jax.process_index(), len(dataset), jax.process_count()):
             batch.append(tokenizer.render_conversation(dataset[i], max_tokens=T + 1))
-            if len(batch) == batch_size:
+            if len(batch) == B:
                 yield collate(batch)
                 batch = []
 

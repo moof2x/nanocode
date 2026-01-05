@@ -271,8 +271,7 @@ def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT, ignore_idx: i
     # cross entropy loss using logsumexp
     logsumexp = jax.nn.logsumexp(logits.astype(jnp.float32), axis=-1)
     valid_targets = jnp.not_equal(targets, ignore_idx)
-    safe_targets = jnp.where(valid_targets, targets, 0)
-    loss = -jnp.take_along_axis(logits, safe_targets[:, :, None], axis=-1).squeeze(-1) + logsumexp
+    loss = -jnp.take_along_axis(logits, targets[:, :, None], axis=-1).squeeze(-1) + logsumexp
     loss = jnp.where(valid_targets, loss, 0.0)
     if reduce:
         loss = loss.sum() / (valid_targets.sum() + 1e-9)

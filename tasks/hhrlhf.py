@@ -22,4 +22,4 @@ class HHRLHF:
         return len(self.ds)
 
     def __getitem__(self, idx: int):
-        return {"messages": self.ds[idx]["messages"]}
+        return {"messages": self.ds[idx]["chosen"]}
