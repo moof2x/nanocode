@@ -81,6 +81,7 @@ world_size = jax.device_count()
 accelerator_flops *= world_size
 mesh = jax.make_mesh((world_size,), ("b",), axis_types=(jax.sharding.AxisType.Explicit))
 jax.set_mesh(mesh)
+print(f"World size: {world_size}")
 
 assert vocab_size == config.vocab_size, f"mismatch between tokenizer vocab_size ({vocab_size}) and config vocab_size ({config.vocab_size})"
 model = GPT.init(config, rng)
@@ -174,20 +175,42 @@ def train_step(idx, targets, model, state):
     def inner_step(carry, j):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
         targets_ = jax.lax.dynamic_slice_in_dim(targets, j * minibatch_size, minibatch_size, axis=0)
-
+        # loss at grad accm step i is L_i = (1/n_i) * sum_j(l_i,j), grads are grad(L_i)
+        # for the jth token of each n_i total non-valid tokens in the current microbatch
         loss, grads = grad_fun(idx_, targets_, model, ignore_idx=-1, compute_dtype=compute_dtype)
+        # to correctly normalize our loss over the total number of non-padding tokens over multiple grad accm steps, we multiply by the total valid token count n_i to correctly accumulate the normalised loss later
+        # L_i = (1/n_i) * sum_j(l_i,j)
+        # n_i * L_i = sum_j(l_i,j)
+        n_i = jnp.sum(targets_ >= 0)
+        loss *= n_i
+        grads = jax.tree.map(lambda g: g * n_i, grads)
         loss_accm, grads_accm = carry
         return (loss_accm + loss, jax.tree.map(jnp.add, grads_accm, grads)), None
 
     initial_loss = jax.lax.pcast(0.0, ("b",), to="varying")
-    (loss, grads), _ = jax.lax.scan(inner_step, (initial_loss, jax.tree.map(jnp.zeros_like, model)), jnp.arange(grad_accm_steps))
-    grads = jax.tree.map(lambda g: g / grad_accm_steps, grads)
-    loss /= grad_accm_steps
+    initial_grads = jax.tree.map(lambda p: jax.lax.pcast(jnp.zeros_like(p), "b", to="varying"), model)
+    
+    # loss_accm = sum_i(n_i * L_i) = sum_i(sum_j(l_i,j))
+    # grads_accm = sum_i(n_i * grad(L_i)) = sum_i(sum_j(grad(l_i,j)))
+    (loss_accm, grads_accm), _ = jax.lax.scan(inner_step, (initial_loss, initial_grads), jnp.arange(grad_accm_steps))
 
-    loss = jax.lax.pmean(loss, "b")
-    grads = jax.lax.pmean(grads, "b")
-    valid_tokens = jnp.sum(targets >= 0)
-    total_tokens = jax.lax.psum(valid_tokens, "b")
+    # N = sum_i(n_i), total valid tokens across microbatches and ranks
+    total_tokens = jax.lax.psum(jnp.sum(targets >= 0), "b")
+
+    # recall that at each grad accm step we calculate the mean loss L_i = (1 / n_i) * sum_j(l_i,j)
+    # and that at each grad accm step we undo this mean by multiplying by n_i, so
+    # loss_accm = sum_i(n_i * L_i) = sum_i(sum_j(l_i,j)) - the unnormalized per-token losses
+    # to now obtain a loss normalized over all valid tokens, we simply divide by N
+    # L = loss_accm / N
+    # (we also perform an all-reduce here to obtain the correct loss over all ranks)
+    loss = jax.lax.psum(loss_accm, "b") / total_tokens
+
+    # our gradient normalisation follows the same above procedure
+    # G = (1 / N) * sum_i(n_i * grad(L_i)) = (1/ N) * sum_i(sum_j(grad(l_i,j)))
+    # G = (1 / N) * grads_accm
+    # note: we sum vs. average gradients across ranks here as we manually normalize grads by global valid token count
+    grads = jax.lax.psum(grads_accm, "b")
+    grads = jax.tree.map(lambda g: g / total_tokens, grads)
 
     updates, state = state.update(model, grads, lr_multiplier)
     model = jax.tree.map(jnp.subtract, model, updates)
