@@ -19,6 +19,7 @@ from nanojax.eval import evaluate_bpb
 from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
+from nanojax.generation import generate
 
 # distributed setup
 world_size, mesh = init_distributed()
@@ -162,7 +163,6 @@ prompts = [
     "The second-last day of the week is"
 ]
 prompt_idx = [tokenizer.encode(p, prepend=tokenizer.get_bos_token_id()) for p in prompts]
-prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
 
 total_training_time = 0
 step = 0
@@ -194,12 +194,16 @@ while True:
 
     if (step % sample_every == 0) or last_step:
         for idx in prompt_idx:
-            for i in range(16):
-                logits, _ = model.forward(idx, compute_dtype=compute_dtype)
-                logits = logits[:, -1, :] # bsv -> bv
-                pred = jnp.argmax(logits, axis=-1, keepdims=True)
-                idx = jnp.concat([idx, pred], axis=1)
-            print0("\t" + tokenizer.decode(idx[0]))
+            new_tokens = generate(
+              idx,
+              model,
+              max_tokens=16,
+              temperature=None,
+              compute_dtype=compute_dtype,
+              pad_token_id=tokenizer.encode_special("<|assistant_end|>"),
+              rng=rng
+            )
+            print0("\t" + tokenizer.decode(idx + [int(t[0]) for t in new_tokens]))
 
     if (step % eval_every == 0) or last_step:
         d0 = time.perf_counter()

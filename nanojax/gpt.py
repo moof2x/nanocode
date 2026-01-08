@@ -245,10 +245,7 @@ class GPT:
             mlp_out = jax.lax.square(jax.nn.relu(mlp_out)) # modded-nanogpt introduced the use of relu^2
             mlp_out = jnp.einsum("bsE,Ee->bse", mlp_out, mlp.c_proj.astype(compute_dtype))
             x = x + mlp_out
-        
-        if kv_cache is not None:
-            kv_cache = kv_cache.forward_pos(s)
-            
+                    
         x = rms_norm(x)
         
         # perform logit softcapping

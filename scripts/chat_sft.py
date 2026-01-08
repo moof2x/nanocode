@@ -24,6 +24,7 @@ from tasks.dolly import Dolly
 from tasks.hhrlhf import HHRLHFChat
 from tasks.mixture import TaskMixture
 from tasks.mmlu import MMLU
+from nanojax.generation import generate
 from tasks.smoltalk import SmolTalk
 
 # distributed setup
@@ -230,7 +231,6 @@ assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>")
 prompts = [{"messages": [{"role": "user", "content": p}]} for p in prompts]
 prompt_idx = [tokenizer.render_conversation(p)[0] for p in prompts]
 prompt_idx = [p + [assistant_start] for p in prompt_idx]
-prompt_idx = [jnp.asarray(p, dtype=jnp.int32)[None, :] for p in prompt_idx]
 
 total_training_time = 0
 x, y = next(train_loader)
@@ -262,12 +262,17 @@ for step in range(num_steps):
 
     if (step % sample_every == 0) or last_step:
         for idx in prompt_idx:
-            for i in range(16):
-                logits, _ = model.forward(idx, compute_dtype=compute_dtype)
-                logits = logits[:, -1, :]  # bsv -> bv
-                pred = jnp.argmax(logits, axis=-1, keepdims=True)
-                idx = jnp.concat([idx, pred], axis=1)
-            print0(tokenizer.decode(idx[0]))
+            new_tokens = generate(
+              idx,
+              model,
+              max_tokens=16,
+              temperature=None,
+              compute_dtype=compute_dtype,
+              pad_token_id=assistant_end,
+              rng=rng,
+              assistant_end_id=assistant_end
+            )
+            print0("\t" + tokenizer.decode(idx + [int(t[0]) for t in new_tokens]))
 
     if (step % eval_every == 0) or last_step:
         d0 = time.perf_counter()
