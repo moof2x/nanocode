@@ -13,7 +13,7 @@ import time
 import numpy as np
 import zarr
 
-from nanojax.common import get_base_dir, print0
+from nanojax.common import get_base_dir, print0, setup_logging
 from nanojax.dataset import parquets_iter_batched
 from nanojax.tokenizer import RustBPETokenizer
 
@@ -51,6 +51,10 @@ def text_iterator():
 text_iter = text_iterator()
 
 # -----------------------------------------------------------------------------
+base_dir = get_base_dir()
+tokenizer_dir = base_dir / "tokenizer"
+tokenizer_dir.mkdir(parents=True, exist_ok=True)
+setup_logging(base_dir /  "tok_train.txt")
 # Train the tokenizer
 t0 = time.time()
 tokenizer = RustBPETokenizer.train_from_iterator(text_iter, args.vocab_size)
@@ -60,7 +64,6 @@ print0(f"Training time: {train_time:.2f}s")
 
 # -----------------------------------------------------------------------------
 # Save the tokenizer to disk
-tokenizer_dir = get_base_dir() / "tokenizer"
 tokenizer.save(tokenizer_dir)
 
 # -----------------------------------------------------------------------------

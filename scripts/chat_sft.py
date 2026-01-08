@@ -14,17 +14,20 @@ import trackio
 
 from nanojax import configs
 from nanojax.checkpointing import load_checkpoint, load_model_config, save_checkpoint
-from nanojax.common import get_base_dir, print0, setup_logging
+from nanojax.common import get_base_dir, print0, setup_logging, init_distributed
 from nanojax.dataloader import tokenizing_data_loader
 from nanojax.eval import evaluate_bpb
 from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
 from tasks.dolly import Dolly
-from tasks.hhrlhf import HHRLHF
+from tasks.hhrlhf import HHRLHFChat
 from tasks.mixture import TaskMixture
 from tasks.mmlu import MMLU
 from tasks.smoltalk import SmolTalk
+
+# distributed setup
+world_size, mesh = init_distributed()
 
 checkpoint = "mid"
 
@@ -76,11 +79,7 @@ print0(f"NANOJAX_BASE_DIR={base_dir} {command}")
 
 max_seq_len = config.sequence_len
 eval_tokens = batch_size * max_seq_len * 20  # magic number from nanochat
-# distributed setup
-world_size = jax.device_count()
 accelerator_flops *= world_size
-mesh = jax.make_mesh((world_size,), ("b",), axis_types=(jax.sharding.AxisType.Explicit))
-jax.set_mesh(mesh)
 print(f"World size: {world_size}")
 
 assert vocab_size == config.vocab_size, f"mismatch between tokenizer vocab_size ({vocab_size}) and config vocab_size ({config.vocab_size})"
@@ -100,18 +99,18 @@ state = Muon.init(
     lm_head_lr=lm_head_lr * init_lr_frac,
     lr=lr * init_lr_frac,
 )
-grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
+grad_fn = jax.value_and_grad(calculate_loss, argnums=2)
 
 model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 
 train_ds = TaskMixture([
     SmolTalk("train[:5%]", seed),  # 460*0.05=23K rows
     Dolly("train[:10%]", seed),  # 10*0.1=1K rows
-    HHRLHF("train[:5%]", seed),  # 160*0.05=8K rows
+    HHRLHFChat("train[:5%]", seed),  # 160*0.05=8K rows
     MMLU("train[:5%]", seed),  # 100*0.05=5K rows
 ], seed)
 
-val_ds = TaskMixture([SmolTalk("test", seed), HHRLHF("test", seed)], seed)
+val_ds = TaskMixture([SmolTalk("test", seed), HHRLHFChat("test", seed)], seed)
 
 
 def dataloader(dataset, B, T, tokenizer):
@@ -177,13 +176,14 @@ def train_step(idx, targets, model, state):
         targets_ = jax.lax.dynamic_slice_in_dim(targets, j * minibatch_size, minibatch_size, axis=0)
         # loss at grad accm step i is L_i = (1/n_i) * sum_j(l_i,j), grads are grad(L_i)
         # for the jth token of each n_i total non-valid tokens in the current microbatch
-        loss, grads = grad_fun(idx_, targets_, model, ignore_idx=-1, compute_dtype=compute_dtype)
+        loss, grads = grad_fn(idx_, targets_, model, ignore_idx=-1, compute_dtype=compute_dtype)
         # to correctly normalize our loss over the total number of non-padding tokens over multiple grad accm steps, we multiply by the total valid token count n_i to correctly accumulate the normalised loss later
         # L_i = (1/n_i) * sum_j(l_i,j)
         # n_i * L_i = sum_j(l_i,j)
         n_i = jnp.sum(targets_ >= 0)
         loss *= n_i
         grads = jax.tree.map(lambda g: g * n_i, grads)
+        
         loss_accm, grads_accm = carry
         return (loss_accm + loss, jax.tree.map(jnp.add, grads_accm, grads)), None
 

@@ -12,9 +12,9 @@ mkdir -p $NANOJAX_BASE_DIR
 
 # train tokenizer on ~2B characters
 rm -rf "$NANOJAX_BASE_DIR/tokenizer"
-python -m nanojax.dataset -n 16
-python -m scripts.tok_train --max_chars=2000000000
-python -m scripts.tok_eval
+python -u -m nanojax.dataset -n 16
+python -u -m scripts.tok_train --max_chars=2000000000
+python -u -m scripts.tok_eval
 
 python -u -m scripts.base_train \
     --batch_size=64 \

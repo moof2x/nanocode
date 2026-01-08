@@ -9,5 +9,4 @@ export PATH="$HOME/.local/bin:$PATH"
 source .venv/bin/activate
 # install the repo dependencies
 uv sync --extra tpu
-export NANOCHAT_BASE_DIR="$HOME/.cache/nanochat"
-mkdir -p $NANOCHAT_BASE_DIR
+echo "source .venv/bin/activate"

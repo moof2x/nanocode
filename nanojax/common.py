@@ -40,3 +40,8 @@ def setup_logging(log_path):
     sys.stderr = DiskLogger(sys.stderr, f)
 
 
+def init_distributed():
+    world_size = jax.device_count()
+    mesh = jax.make_mesh((world_size,), ("b",), axis_types=(jax.sharding.AxisType.Explicit,))
+    jax.set_mesh(mesh)
+    return world_size, mesh

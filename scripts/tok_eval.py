@@ -2,9 +2,14 @@
 Evaluate compression ratio of the tokenizer.
 """
 
-from nanojax.common import print0
+from nanojax.common import print0, setup_logging, get_base_dir, init_distributed
 from nanojax.dataset import parquets_iter_batched
 from nanojax.tokenizer import RustBPETokenizer, get_tokenizer
+
+# distributed/logging setup
+base_dir = get_base_dir()
+setup_logging(base_dir / "tok_eval.txt")
+init_distributed()
 
 # Random text I got from a random website this morning
 news_text = r"""
@@ -197,7 +202,7 @@ RESET = '\033[0m'
 
 # Print vocab sizes
 print0("--tok_eval.py--")
-print0(f"\nVocab sizes:")
+print0("\nVocab sizes:")
 print0(f"GPT-2: {vocab_sizes['gpt2']}")
 print0(f"GPT-4: {vocab_sizes['gpt4']}")
 print0(f"Ours: {vocab_sizes['ours']}")

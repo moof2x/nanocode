@@ -13,12 +13,15 @@ import trackio
 from nanojax import configs
 from nanojax.adamw import AdamW
 from nanojax.checkpointing import save_checkpoint
-from nanojax.common import get_base_dir, print0, setup_logging
+from nanojax.common import get_base_dir, print0, setup_logging, init_distributed
 from nanojax.dataloader import get_distributed_dataloader
 from nanojax.eval import evaluate_bpb
 from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
+
+# distributed setup
+world_size, mesh = init_distributed()
 
 config = configs.d3
 ### optimization hparams
@@ -72,10 +75,8 @@ assert vocab_size == config.vocab_size, f"mismatch between tokenizer vocab_size 
 print0(f"Vocab size: {vocab_size}")
 
 # distributed setup
-world_size = jax.device_count()
 accelerator_flops *= world_size
-mesh = jax.make_mesh((world_size,), ("b",), axis_types=(jax.sharding.AxisType.Explicit))
-jax.set_mesh(mesh)
+print(f"World size {world_size}")
 
 train_loader = get_distributed_dataloader(batch_size, max_seq_len, "train", tokenizer, mesh)
 get_val_dataloader = lambda: get_distributed_dataloader(minibatch_size, max_seq_len, "val", tokenizer, mesh)
@@ -100,7 +101,7 @@ num_flops_per_token = estimate_flops(model)
 print0(f"Estimated FLOPs per token: {num_flops_per_token}")
 
 state = Muon.init(model, eps=eps,  wd=wd, wte_lr=wte_lr, lm_head_lr=lm_head_lr, lr=lr)
-grad_fun = jax.value_and_grad(calculate_loss, argnums=2)
+grad_fn = jax.value_and_grad(calculate_loss, argnums=2)
 
 trackio.init(
     project="nanojax",
@@ -132,7 +133,7 @@ def train_step(idx, targets, model, state):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
         targets_ = jax.lax.dynamic_slice_in_dim(targets, j * minibatch_size, minibatch_size, axis=0)
 
-        loss, grads = grad_fun(idx_, targets_, model, compute_dtype=compute_dtype)
+        loss, grads = grad_fn(idx_, targets_, model, compute_dtype=compute_dtype)
         loss_accm, grads_accm = carry
         return (loss_accm + loss, jax.tree.map(jnp.add, grads_accm, grads)), None
 
