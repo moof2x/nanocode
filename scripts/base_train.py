@@ -8,7 +8,6 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-import trackio
 
 from nanojax import configs
 from nanojax.adamw import AdamW
@@ -33,7 +32,7 @@ grad_clip = 1.0
 
 # learning rates/scheduling
 warmup_ratio = 0.0
-warmdown_ratio = 0.2
+warmdown_ratio = 0.4
 final_lr_frac = 0.0
 eps = 1e-10
 wd = 0.0
@@ -77,7 +76,7 @@ print0(f"Vocab size: {vocab_size}")
 
 # distributed setup
 accelerator_flops *= world_size
-print(f"World size {world_size}")
+print(f"World size: {world_size}")
 
 train_loader = get_distributed_dataloader(batch_size, max_seq_len, "train", tokenizer, mesh)
 get_val_dataloader = lambda: get_distributed_dataloader(minibatch_size, max_seq_len, "val", tokenizer, mesh)
@@ -90,7 +89,7 @@ model = GPT.init(
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
 print0(f"{num_params} model parameters")
 if num_steps < 0:
-    total_tokens = num_params * 20
+    total_tokens = num_params * 8
     num_steps = math.ceil(total_tokens / max_seq_len / (batch_size * world_size)) + 1
 else:
     total_tokens = num_steps * max_seq_len * (batch_size * world_size)
@@ -103,11 +102,6 @@ print0(f"Estimated FLOPs per token: {num_flops_per_token}")
 
 state = Muon.init(model, eps=eps,  wd=wd, wte_lr=wte_lr, lm_head_lr=lm_head_lr, lr=lr)
 grad_fn = jax.value_and_grad(calculate_loss, argnums=2)
-
-trackio.init(
-    project="nanojax",
-    config=asdict(config)
-)
 
 def get_lr_multiplier(step):
     warmup_iters = round(warmup_ratio * num_steps)
@@ -124,12 +118,12 @@ def get_lr_multiplier(step):
 model_spec = jax.tree.map(lambda _: jax.P(), model)
 state_spec = jax.tree.map(lambda _: jax.P(), state)
 
-in_specs = (jax.P("b", None), jax.P("b", None), model_spec, state_spec)
+in_specs = (jax.P("b", None), jax.P("b", None), model_spec, state_spec, jax.P())
 out_specs = (model_spec, state_spec, jax.P())
 
 @jax.jit(donate_argnums=(2, 3))
 @jax.shard_map(in_specs=in_specs, out_specs=out_specs, mesh=mesh)
-def train_step(idx, targets, model, state):
+def train_step(idx, targets, model, state, lr_multiplier):
     def inner_step(carry, j):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
         targets_ = jax.lax.dynamic_slice_in_dim(targets, j * minibatch_size, minibatch_size, axis=0)
@@ -169,9 +163,9 @@ step = 0
 x, y = next(train_loader)
 while True:
     last_step = (step + 1) == num_steps
-    lr_multiplier = get_lr_multiplier(step)
+    lr_multiplier = jnp.array(get_lr_multiplier(step))
     d0 = time.perf_counter()
-    model, state, loss = train_step(x, y, model, state)
+    model, state, loss = train_step(x, y, model, state, lr_multiplier)
     x, y = next(train_loader)
     loss = float(loss) # synchronise
     dt = time.perf_counter() - d0
@@ -184,12 +178,10 @@ while True:
     total_training_time += dt
 
     print0(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | | tkps: {tkps} | mfu: {mfu:.2f} | min ETA: {eta:.1f} min | lr_multiplier: {lr_multiplier:.3f}")
-    log_dict = {"loss": loss, "tkps": tkps, "mfu": mfu,  "lr_multiplier": lr_multiplier}
 
     if (step % profile_every == 0) or last_step:
         memory_stats = jax.devices()[0].memory_stats() or {}
         used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
-        log_dict["peak_bytes_reserved"] = used
         print0(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
 
     if (step % sample_every == 0) or last_step:
@@ -207,13 +199,11 @@ while True:
 
     if (step % eval_every == 0) or last_step:
         d0 = time.perf_counter()
-        eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size) 
+        eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size)
         val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype, mesh)
         print0(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
-        log_dict["val/bpb"] = val_bpb
 
-    step += 1 
-    trackio.log(log_dict)
+    step += 1
     if step == num_steps:
         break
 
@@ -221,4 +211,3 @@ print0(f"Total training time: {(total_training_time/60):.2f}min")
 save_checkpoint(checkpoint_dir / "model.zarr", model)
 save_checkpoint(checkpoint_dir / "state.zarr", state)
 print0(f"Model (model.zarr) and optimizer state (state.zarr) checkpoints saved to {checkpoint_dir}.")
-trackio.finish()
