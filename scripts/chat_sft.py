@@ -252,7 +252,7 @@ for step in range(num_steps):
     print0(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f} | min ETA {eta:.1f} | lr_multiplier: {lr_multiplier:.3f}")
 
     if (step % profile_every == 0) or last_step:
-        memory_stats = jax.devices()[0].memory_stats() or {}
+        memory_stats = jax.local_devices()[0].memory_stats() or {}
         used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
         print0(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
 

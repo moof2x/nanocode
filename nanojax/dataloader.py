@@ -41,8 +41,8 @@ def tokenizing_data_loader(B, T, split, tokenizer, tokenizer_threads=4, tokenize
         # as torch's cross entropy requires int64 targets for only historical(?) reasons
         tokens = np.array([token_buffer.popleft() for _ in range(needed_tokens)], dtype=np.int32)
         # Create the inputs/targets and yield
-        inputs = jnp.asarray(tokens[:-1]).reshape(B, T)
-        targets = jnp.asarray(tokens[1:]).reshape(B, T)
+        inputs = tokens[:-1].reshape(B, T)
+        targets = tokens[1:].reshape(B, T)
         yield inputs, targets
 
 def get_distributed_dataloader(batch_size, seq_len, split, tokenizer, mesh):

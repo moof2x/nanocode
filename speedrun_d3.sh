@@ -11,10 +11,11 @@ export NANOJAX_BASE_DIR="$HOME/.cache/nanojax_d3"
 mkdir -p $NANOJAX_BASE_DIR
 
 # train tokenizer on ~1B characters
-rm -rf "$NANOJAX_BASE_DIR/tokenizer"
 python -m nanojax.dataset -n 4
-python -m scripts.tok_train --max_chars=1000000000 --vocab_size=8000
-python -m scripts.tok_eval
+if [ ! -d "$NANOJAX_BASE_DIR/tokenizer" ]; then
+    python -m scripts.tok_train --max_chars=1000000000 --vocab_size=8000
+    python -m scripts.tok_eval
+fi
 exit 1
 # train a very small 4 layer model on the CPU
 # each optimization step processes a single sequence of 1024 tokens

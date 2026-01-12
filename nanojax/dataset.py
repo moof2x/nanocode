@@ -17,7 +17,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import requests
 
-from nanojax.common import get_base_dir, print0
+from nanojax.common import get_base_dir, print0, init_distributed
 
 # -----------------------------------------------------------------------------
 # The specifics of the current pretraining dataset
@@ -111,6 +111,7 @@ if __name__ == "__main__":
 
     num = MAX_SHARD + 1 if args.num_files == -1 else min(args.num_files, MAX_SHARD + 1)
     ids_to_download = list(range(num))
+    init_distributed()
     print0(f"Downloading {len(ids_to_download)} shards using {args.num_workers} workers...")
     print0(f"Target directory: {DATA_DIR}")
     with Pool(processes=args.num_workers) as pool:

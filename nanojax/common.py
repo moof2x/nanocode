@@ -41,6 +41,10 @@ def setup_logging(log_path):
 
 
 def init_distributed():
+    try:
+        jax.distributed.initialize()
+    except ValueError:
+        pass # TODO: fixme
     world_size = jax.device_count()
     mesh = jax.make_mesh((world_size,), ("b",), axis_types=(jax.sharding.AxisType.Explicit,))
     jax.set_mesh(mesh)

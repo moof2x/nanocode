@@ -35,7 +35,7 @@ warmdown_ratio = 0.4
 final_lr_frac = 0.0
 eps = 1e-10
 wd = 0.0
-wte_lr = 0.2
+wte_lr = 0.3
 lm_head_lr = 0.004
 lr = 0.02
 
@@ -60,7 +60,7 @@ for k, v in user_config.items():
 grad_accm_steps = batch_size // minibatch_size
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
 max_seq_len = config.sequence_len
-eval_tokens = batch_size * max_seq_len* 20 # magic number from nanochat
+eval_tokens = batch_size * max_seq_len * 20
 checkpoint_dir = base_dir / "base_checkpoints"
 rng = jax.random.key(seed)
 
@@ -174,7 +174,7 @@ while True:
     print0(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | | tkps: {tkps} | mfu: {mfu:.2f} | min ETA: {eta:.1f} min | lr_multiplier: {lr_multiplier:.3f}")
 
     if (step % profile_every == 0) or last_step:
-        memory_stats = jax.devices()[0].memory_stats() or {}
+        memory_stats = jax.local_devices()[0].memory_stats() or {}
         used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
         print0(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
 

@@ -9,4 +9,5 @@ export PATH="$HOME/.local/bin:$PATH"
 source .venv/bin/activate
 # install the repo dependencies
 uv sync --extra tpu
-echo "source .venv/bin/activate"
+echo "Install completed:"
+echo "source .venv/bin/activate && ./speedrun.sh"
