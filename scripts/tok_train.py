@@ -17,6 +17,7 @@ from nanojax.common import get_base_dir, print0, setup_logging, init_distributed
 from nanojax.dataset import parquets_iter_batched
 from nanojax.tokenizer import RustBPETokenizer
 
+init_distributed()
 # -----------------------------------------------------------------------------
 # Parse command line arguments
 
@@ -50,7 +51,6 @@ def text_iterator():
                 return
 text_iter = text_iterator()
 
-init_distributed()
 # -----------------------------------------------------------------------------
 base_dir = get_base_dir()
 tokenizer_dir = base_dir / "tokenizer"

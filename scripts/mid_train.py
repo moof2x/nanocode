@@ -77,7 +77,7 @@ vocab_size = tokenizer.get_vocab_size()
 max_seq_len = config.sequence_len
 eval_tokens = batch_size * max_seq_len* 20 # magic number from nanochat
 accelerator_flops *= world_size
-print(f"World size: {world_size}")
+print0(f"World size: {world_size}")
 
 assert vocab_size == config.vocab_size, f"mismatch between tokenizer vocab_size ({vocab_size}) and config vocab_size ({config.vocab_size})"
 model = GPT.init(
