@@ -20,7 +20,6 @@ from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
 from tasks.dolly import Dolly
-from tasks.hhrlhf import HHRLHFChat
 from tasks.mixture import TaskMixture
 from tasks.mmlu import MMLU
 from tasks.smoltalk import SmolTalk
@@ -100,13 +99,11 @@ last_step = False
 train_ds = TaskMixture([
     SmolTalk("train", seed), # 460K rows
     Dolly("train", seed), # 10K rows
-    HHRLHFChat("train", seed), # 160K rows
     MMLU("train", seed) # 100K rows
 ], seed)
 
 val_ds = TaskMixture([
   SmolTalk("test", seed),
-  HHRLHFChat("test", seed)                  
 ], seed)
 approx_progress = 0.0
 def dataloader(dataset, B, T, split, tokenizer):

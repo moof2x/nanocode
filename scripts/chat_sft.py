@@ -20,7 +20,6 @@ from nanojax.gpt import GPT, GPTConfig, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
 from tasks.dolly import Dolly
-from tasks.hhrlhf import HHRLHFChat
 from tasks.mixture import TaskMixture
 from tasks.mmlu import MMLU
 from nanojax.generation import generate
@@ -104,13 +103,12 @@ grad_fn = jax.value_and_grad(calculate_loss, argnums=2)
 model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 
 train_ds = TaskMixture([
-    SmolTalk("train[:5%]", seed),  # 460*0.05=23K rows
-    Dolly("train[:10%]", seed),  # 10*0.1=1K rows
-    HHRLHFChat("train[:5%]", seed),  # 160*0.05=8K rows
-    MMLU("train[:5%]", seed),  # 100*0.05=5K rows
+    SmolTalk("train", seed),  # 460*0.05=23K rows
+    Dolly("train", seed),  # 10*0.1=1K rows
+    MMLU("train", seed),  # 100*0.05=5K rows
 ], seed)
 
-val_ds = TaskMixture([SmolTalk("test", seed), HHRLHFChat("test", seed)], seed)
+val_ds = TaskMixture([SmolTalk("test", seed),], seed)
 
 
 def dataloader(dataset, B, T, tokenizer):
