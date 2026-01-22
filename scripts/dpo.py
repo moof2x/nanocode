@@ -9,13 +9,14 @@ import jax.numpy as jnp
 import numpy as np
 
 from nanojax.checkpointing import load_checkpoint, load_model_config, save_checkpoint
-from nanojax.common import get_base_dir, print0, setup_logging, init_distributed
+from nanojax.common import get_base_dir, init_distributed, print0, setup_logging
+from nanojax.generation import generate
 from nanojax.gpt import GPT, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
-from tasks.mixture import TaskMixture
 from tasks.dataset import PreferenceDataset
-from nanojax.generation import generate
+from tasks.mixture import TaskMixture
+
 # distributed setup
 world_size, mesh = init_distributed()
 

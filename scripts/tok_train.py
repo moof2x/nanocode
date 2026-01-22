@@ -13,7 +13,7 @@ import time
 import numpy as np
 import zarr
 
-from nanojax.common import get_base_dir, print0, setup_logging, init_distributed
+from nanojax.common import get_base_dir, init_distributed, print0, setup_logging
 from nanojax.dataset import parquets_iter_batched
 from nanojax.tokenizer import RustBPETokenizer
 

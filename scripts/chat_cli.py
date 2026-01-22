@@ -8,9 +8,9 @@ import numpy as np
 
 from nanojax.checkpointing import load_checkpoint, load_model_config
 from nanojax.common import get_base_dir, print0
+from nanojax.generation import generate
 from nanojax.gpt import GPT, KVCache
 from nanojax.tokenizer import get_tokenizer
-from nanojax.generation import generate
 
 checkpoint = "mid"
 compute_dtype = jnp.bfloat16
