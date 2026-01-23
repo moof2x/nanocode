@@ -1,6 +1,8 @@
 import jax
 import jax.numpy as jnp
-from nanojax.gpt import KVCache, GPT
+
+from nanojax.gpt import GPT, KVCache
+
 
 @jax.jit(static_argnums=(4,))
 def prefill(

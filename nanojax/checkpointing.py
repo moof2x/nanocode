@@ -1,10 +1,11 @@
+from dataclasses import replace
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import zarr
-from dataclasses import replace
+
 from nanojax.gpt import GPT, GPTConfig
 from nanojax.muon import Muon
 

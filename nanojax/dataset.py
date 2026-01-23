@@ -17,7 +17,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import requests
 
-from nanojax.common import get_base_dir, print0, init_distributed
+from nanojax.common import get_base_dir, init_distributed, print0
 
 # -----------------------------------------------------------------------------
 # The specifics of the current pretraining dataset
