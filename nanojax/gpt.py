@@ -8,7 +8,6 @@
 # they come from https://github.com/openai/gpt-2/blob/master/src/model.py
 
 import itertools
-import math
 import operator
 from dataclasses import dataclass, replace
 from functools import partial

@@ -9,7 +9,6 @@ Taken from karparthy/nanochat/nanochat/dataset.py
 """
 
 import argparse
-import os
 import time
 from multiprocessing import Pool
 from pathlib import Path

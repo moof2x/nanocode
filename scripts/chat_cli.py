@@ -1,15 +1,13 @@
 import os
 import sys
-from dataclasses import replace
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from nanojax.checkpointing import load_checkpoint, load_model_config
 from nanojax.common import get_base_dir, print0
 from nanojax.generation import generate
-from nanojax.gpt import GPT, KVCache
+from nanojax.gpt import GPT
 from nanojax.tokenizer import get_tokenizer
 
 checkpoint = "mid"

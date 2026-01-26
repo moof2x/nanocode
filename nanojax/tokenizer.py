@@ -3,14 +3,12 @@ Taken from karparthy/nanochat/nanochat/ and stripped of the HF tokenizer.
 """
 
 import copy
-import os
 import pickle
 from functools import lru_cache
 from pathlib import Path
 
-import tiktoken
-
 import rustbpe
+import tiktoken
 
 SPECIAL_TOKENS = [
     # every document begins with the Beginning of Sequence (BOS) token that delimits documents

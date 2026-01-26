@@ -2,7 +2,6 @@ from collections import deque
 from functools import partial
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 
 from nanojax.dataset import parquets_iter_batched

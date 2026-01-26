@@ -7,7 +7,6 @@ This script is identical to karparthy/nanochat/scripts/tok_train.py
 but uses Zarr instead of torch to serialize token_bytes.py
 """
 import argparse
-import os
 import time
 
 import numpy as np
