@@ -9,7 +9,7 @@
 export OMP_NUM_THREADS=1
 export NANOJAX_BASE_DIR="$HOME/.cache/nanojax_d20"
 mkdir -p $NANOJAX_BASE_DIR
-sudo rm -f /tmp/libtpu_lockfile
+rm -f /tmp/libtpu_lockfile
 # train tokenizer on ~2B characters
 python -m nanojax.dataset -n 248
 
@@ -17,7 +17,7 @@ if [ ! -d "$NANOJAX_BASE_DIR/tokenizer" ]; then
     python -m scripts.tok_train --max_chars=2000000000 --vocab_size=65536
     python -m scripts.tok_eval
 fi
-
+exit 1
 python -u -m scripts.base_train \
     --batch_size=32 \
     --minibatch_size=2 \
