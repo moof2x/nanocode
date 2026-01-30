@@ -1,4 +1,3 @@
-from collections import deque
 from functools import partial
 
 import jax
@@ -7,14 +6,13 @@ import numpy as np
 from nanojax.dataset import parquets_iter_batched
 
 
-def tokenizing_data_loader(B, T, split, tokenizer, tokenizer_threads=4, tokenizer_batch_size=128):
-    """Stream pretraining text from parquet files, tokenize, yield training batches."""
+def tokenizing_data_loader(B, T, split, tokenizer, tokenizer_threads=4, tokenizer_batch_size=128, buffer_size=1000):
     assert split in ["train", "val"], "split must be 'train' or 'val'"
     bos_token = tokenizer.get_bos_token_id()
-    # scratch buffer holds the tokens for one iteration
-    token_buffer = deque() # we stream tokens on the right and pop from the left
+    # document buffer holds tokenized documents for best-fit packing
+    doc_buffer = []
     B *= jax.local_device_count() # per-device batch size to process batch size
-    needed_tokens = B * T + 1 # +1 is because we also need the target at the last token
+    row_capacity = T + 1 # +1 is because we also need the target at the last token
     world_size, rank = jax.process_count(), jax.process_index()
 
     # infinite iterator over document batches
@@ -26,22 +24,45 @@ def tokenizing_data_loader(B, T, split, tokenizer, tokenizer_threads=4, tokenize
                 for i in range(0, len(batch), tokenizer_batch_size):
                     yield batch[i:i+tokenizer_batch_size]
     batches = document_batches()
-    batch_index = 0
+
     while True:
-        # Accumulate enough tokens for one iteration before yielding.
-        while len(token_buffer) < needed_tokens:
+        # Accumulate enough documents in buffer before packing
+        while len(doc_buffer) < buffer_size:
             doc_batch = next(batches)
             token_lists = tokenizer.encode(doc_batch, prepend=bos_token, num_threads=tokenizer_threads)
             for tokens in token_lists:
-                token_buffer.extend(tokens)
-            batch_index += 1
-        # Move tokens from the deque into the scratch buffer
+                doc_buffer.append(tokens)
+
+        # Pack B rows using best-fit algorithm
+        rows = []
+        for _ in range(B):
+            row = []
+            while len(row) < row_capacity:
+                remaining = row_capacity - len(row)
+                # best-fit: find largest doc that fits entirely
+                best_idx = -1
+                best_len = 0
+                for i, doc in enumerate(doc_buffer):
+                    doc_len = len(doc)
+                    if doc_len <= remaining and doc_len > best_len:
+                        best_idx = i
+                        best_len = doc_len
+                if best_idx >= 0:
+                    doc = doc_buffer.pop(best_idx)
+                    row.extend(doc)
+                else:
+                    # no doc fits - crop shortest to fill remaining
+                    shortest_idx = min(range(len(doc_buffer)), key=lambda i: len(doc_buffer[i]))
+                    doc = doc_buffer.pop(shortest_idx)
+                    row.extend(doc[:remaining])
+            rows.append(row[:row_capacity])
+
         # note: JAX does not natively support int64 (see JAX gotchas), but this isn't really an issue
         # as torch's cross entropy requires int64 targets for only historical(?) reasons
-        tokens = np.array([token_buffer.popleft() for _ in range(needed_tokens)], dtype=np.int32)
+        row_data = np.array(rows, dtype=np.int32)
         # Create the inputs/targets and yield
-        inputs = tokens[:-1].reshape(B, T)
-        targets = tokens[1:].reshape(B, T)
+        inputs = row_data[:, :-1]
+        targets = row_data[:, 1:]
         yield inputs, targets
 
 def get_distributed_dataloader(batch_size, seq_len, split, tokenizer, mesh):
