@@ -18,10 +18,12 @@ SPECIAL_TOKENS = [
     "<|user_end|>",
     "<|assistant_start|>", # assistant messages
     "<|assistant_end|>",
-    "<|python_start|>", # assistant invokes python REPL tool
-    "<|python_end|>",
-    "<|output_start|>", # python REPL outputs back to assistant
-    "<|output_end|>",
+    "<|tool_call_start|>",
+    "<|tool_arg|>",
+    "<|tool_val|>",
+    "<|tool_call_end|>",
+    "<|tool_result_start|>",
+    "<|tool_result_end|>",
 ]
 
 # NOTE: this split pattern deviates from GPT-4 in that we use \p{N}{1,2} instead of \p{N}{1,3}
@@ -130,7 +132,7 @@ class RustBPETokenizer:
         with open(pickle_path, "wb") as f:
             pickle.dump(self.enc, f)
         print(f"Saved tokenizer encoding to {pickle_path}")
-
+    
     def render_conversation(self, conversation, max_tokens=2048):
         """
         Tokenize a single Chat conversation (which we call a "doc" or "document" here).
@@ -163,58 +165,60 @@ class RustBPETokenizer:
         bos = self.get_bos_token_id()
         user_start, user_end = self.encode_special("<|user_start|>"), self.encode_special("<|user_end|>")
         assistant_start, assistant_end = self.encode_special("<|assistant_start|>"), self.encode_special("<|assistant_end|>")
-        python_start, python_end = self.encode_special("<|python_start|>"), self.encode_special("<|python_end|>")
-        output_start, output_end = self.encode_special("<|output_start|>"), self.encode_special("<|output_end|>")
-
+        tool_call_start, tool_call_end = self.encode_special("<|tool_call_start|>"), self.encode_special("<|tool_call_end|>")
+        tool_result_start, tool_result_end = self.encode_special("<|tool_result_start|>"), self.encode_special("<|tool_result_end|>")
+        tool_arg, tool_val = self.encode_special("<|tool_arg|>"), self.encode_special("<|tool_val|>")        
+        
         # now we can tokenize the conversation
         add_tokens(bos, 0)
         for i, message in enumerate(messages):
-
             # some sanity checking here around assumptions, to prevent footguns
-            must_be_from = "user" if i % 2 == 0 else "assistant"
-            assert message["role"] == must_be_from, f"Message {i} is from {message['role']} but should be from {must_be_from}"
+            # must_be_from = ["user", "tool_result"] if i % 2 == 0 else "assistant"
+            # must_be_from = "assistant" if i > 0 and messages[i-1]["role"] in ["user", "tool_result"] else ["user", "tool_result"]
+            must_be_from = ["user", "assistant", "tool_result"] if i > 0 else ["user", "tool_result"]
+            assert message["role"] in must_be_from, f"Message {i} is from {message['role']} but should be one of {must_be_from}"
 
-            # content can be either a simple string or a list of parts (e.g. containing tool calls)
-            content = message["content"]
 
             if message["role"] == "user":
-                assert isinstance(content, str), "User messages are simply expected to be strings"
-                value_ids = self.encode(content)
                 add_tokens(user_start, 0)
-                add_tokens(value_ids, 0)
+                add_tokens(self.encode(message["content"]), 0)
                 add_tokens(user_end, 0)
+                
             elif message["role"] == "assistant":
                 add_tokens(assistant_start, 0)
-                if isinstance(content, str):
-                    # simple string => simply add the tokens
-                    value_ids = self.encode(content)
-                    add_tokens(value_ids, 1)
-                elif isinstance(content, list):
-                    for part in content:
-                        value_ids = self.encode(part["text"])
-                        if part["type"] == "text":
-                            # string part => simply add the tokens
-                            add_tokens(value_ids, 1)
-                        elif part["type"] == "python":
-                            # python tool call => add the tokens inside <|python_start|> and <|python_end|>
-                            add_tokens(python_start, 1)
-                            add_tokens(value_ids, 1)
-                            add_tokens(python_end, 1)
-                        elif part["type"] == "python_output":
-                            # python output => add the tokens inside <|output_start|> and <|output_end|>
-                            # none of these tokens are supervised because the tokens come from Python at test time
-                            add_tokens(output_start, 0)
-                            add_tokens(value_ids, 0)
-                            add_tokens(output_end, 0)
-                        else:
-                            raise ValueError(f"Unknown part type: {part['type']}")
-                else:
-                    raise ValueError(f"Unknown content type: {type(content)}")
+                if "tool_call" in message:
+                    if "content" in message:
+                        add_tokens(self.encode(message["content"]), 1)
+                    # assert "content" not in message, f"Assistant tool call message has a 'content' entry: '{message['content']}'"
+
+                    tool_call = message["tool_call"]
+                    # ensure the tool call is correctly formatted
+                    assert "name" in tool_call
+                    assert "args" in tool_call and isinstance(tool_call["args"], dict), f"Expected tool call arguments as 'args': {'arg_1': val_1, 'arg_2': val_2}, but found {tool_call['args']}"
+                    add_tokens(tool_call_start, 1)
+                    add_tokens(self.encode(tool_call["name"]), 1)
+                    for arg, val in tool_call["args"].items():
+                        # <|tool_arg|>{arg}<|tool_val|>{val}
+                        add_tokens(tool_arg, 1) 
+                        add_tokens(self.encode(arg), 1)
+                        add_tokens(tool_val, 1)
+                        add_tokens(self.encode(str(val)), 1)
+                    add_tokens(tool_call_end, 1)
+                else:        
+                    add_tokens(self.encode(message["content"]), 1)
                 add_tokens(assistant_end, 1)
+    
+            elif message["role"] == "tool_result":
+
+                add_tokens(tool_result_start, 0)
+                add_tokens(self.encode(message["content"]), 0)
+                add_tokens(tool_result_end, 0)
+            else:
+                raise ValueError(f"Unsupported role: {message['role']}")
 
         # truncate to max_tokens tokens MAX (helps prevent OOMs)
-        ids = ids[:max_tokens]
-        mask = mask[:max_tokens]
+        # ids = ids[:max_tokens]
+        # mask = mask[:max_tokens]
         return ids, mask
 
     def visualize_tokenization(self, ids, mask, with_token_id=False):
@@ -253,7 +257,6 @@ class RustBPETokenizer:
         return ids
 
 # -----------------------------------------------------------------------------
-# nanochat-specific convenience functions
 
 def get_tokenizer():
     from nanojax.common import get_base_dir
