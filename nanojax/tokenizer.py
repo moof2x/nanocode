@@ -217,8 +217,8 @@ class RustBPETokenizer:
                 raise ValueError(f"Unsupported role: {message['role']}")
 
         # truncate to max_tokens tokens MAX (helps prevent OOMs)
-        # ids = ids[:max_tokens]
-        # mask = mask[:max_tokens]
+        ids = ids[:max_tokens]
+        mask = mask[:max_tokens]
         return ids, mask
 
     def visualize_tokenization(self, ids, mask, with_token_id=False):

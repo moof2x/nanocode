@@ -103,36 +103,84 @@ model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 train_ds = TaskMixture([
     SmolTalk("train", seed),  # 460*0.05=23K rows
     Dolly("train", seed),  # 10*0.1=1K rows
-    MMLU("train", seed),  # 100*0.05=5K rows
+    MMLU("auxiliary_train", "train"),  # 100*0.05=5K rows
 ], seed)
 
 val_ds = TaskMixture([SmolTalk("test", seed),], seed)
 
 
-def dataloader(dataset, B, T, tokenizer):
-    pad_token_id = tokenizer.encode_special("<|assistant_end|>")
-    B *= jax.local_device_count() # each process collects data for all of it's local accelerators
+def dataloader(dataset, B, T, tokenizer, buffer_size=100):
+    bos_token = tokenizer.get_bos_token_id()
+    B *= jax.local_device_count() # each process collects data for all of its local accelerators
+    row_capacity = T + 1
+
+    conv_buffer = []
+    cursor = jax.process_index()
+
+    def refill_buffer():
+        nonlocal cursor
+        while len(conv_buffer) < buffer_size:
+            if cursor >= len(dataset):
+                cursor = jax.process_index()
+            conversation = dataset[cursor]
+            ids, mask = tokenizer.render_conversation(conversation, max_tokens=T + 1)
+            conv_buffer.append((ids, mask))
+            cursor += jax.process_count()
 
     def collate(batch):
-        # we always pad or truncate to max seq len
-        inputs = np.full((B, T), pad_token_id, dtype=np.int32)
-        targets = np.full_like(inputs, -1)
+        # we always pack/pad/truncate to max seq len
+        inputs = np.zeros((B, T), dtype=np.int32)
+        targets = np.full((B, T), -1, dtype=np.int32)
 
         for i, (ids, mask) in enumerate(batch):
             n = len(ids)
-            inputs[i, : n - 1] = ids[:-1]
+            inputs[i, :n-1] = ids[:-1]
             row_targets = ids[1:n]
-            row_targets[mask[1:n] == 0] = -1
-            targets[i, : n - 1] = row_targets
+            row_mask = mask[1:n]
+            row_targets[row_mask == 0] = -1
+            targets[i, :n-1] = row_targets
+
         return jnp.asarray(inputs), jnp.asarray(targets)
 
-    batch = []
     while True:
-        for i in range(jax.process_index(), len(dataset), jax.process_count()):
-            batch.append(tokenizer.render_conversation(dataset[i], max_tokens=T + 1))
-            if len(batch) == B:
-                yield collate(batch)
-                batch = []
+        batch = []
+
+        for _ in range(B):
+            row_ids = []
+            row_mask = []
+
+            while len(row_ids) < row_capacity:
+                while len(conv_buffer) < buffer_size and cursor < len(dataset) + jax.process_count():
+                    refill_buffer()
+
+                if not conv_buffer:
+                    remaining = row_capacity - len(row_ids)
+                    row_ids.extend([bos_token] * remaining)
+                    row_mask.extend([0] * remaining)
+                    break
+
+                remaining = row_capacity - len(row_ids)
+
+                best_idx = -1
+                best_len = 0
+                for i, (conv_ids, conv_mask) in enumerate(conv_buffer):
+                    conv_len = len(conv_ids)
+                    if conv_len <= remaining and conv_len > best_len:
+                        best_idx = i
+                        best_len = conv_len
+
+                if best_idx >= 0:
+                    conv_ids, conv_mask = conv_buffer.pop(best_idx)
+                    row_ids.extend(conv_ids)
+                    row_mask.extend(conv_mask)
+                else:
+                    row_ids.extend([bos_token] * remaining)
+                    row_mask.extend([0] * remaining)
+                    break
+
+            batch.append((row_ids[:row_capacity], row_mask[:row_capacity]))
+
+        yield collate(batch)
 
 
 def dist_dataloader(dataset, batch_size, seq_len, tokenizer, mesh):
