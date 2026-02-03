@@ -16,6 +16,7 @@ from nanojax.generation import generate
 from nanojax.gpt import GPT, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
+from scripts.base_eval import evaluate_model
 
 # distributed setup
 world_size, mesh = init_distributed()
@@ -44,6 +45,8 @@ compute_dtype = jnp.bfloat16
 ### training loop control
 sample_every = 50
 eval_every = 50
+core_metric_every = 2000
+core_metric_max_per_task = 500
 profile_every = 500
 
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["config", "compute_dtype"]
@@ -193,6 +196,13 @@ while True:
         eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size)
         val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype, mesh)
         print0(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
+
+    if (step % core_metric_every == 0) or last_step:
+        d0 = time.perf_counter()
+        core_results = evaluate_model(model, tokenizer, compute_dtype, max_per_task=core_metric_max_per_task)
+        core_metric = core_results['core_metric']
+        dt = time.perf_counter() - d0
+        print0(f"\tcore metric: {core_metric:.4f} | dt: {dt:.2f}s")
 
     step += 1
     if step == num_steps:

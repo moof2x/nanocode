@@ -15,6 +15,7 @@ from nanojax.generation import generate
 from nanojax.gpt import GPT, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
+from scripts.chat_eval import run_chat_eval
 from tasks.dolly import Dolly
 from tasks.mixture import TaskMixture
 from tasks.mmlu import MMLU
@@ -47,6 +48,8 @@ compute_dtype = jnp.bfloat16
 ### training loop control
 sample_every = 50
 eval_every = 50
+eval_metrics_every = 200
+eval_max_problems = 1024
 profile_every = 500
 
 config_keys = [k for k,v in globals().items() if not k.startswith("_") and isinstance(v, (int, float, bool, str))] + ["compute_dtype"]
@@ -268,6 +271,20 @@ for step in range(num_steps):
         eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size)
         val_bpb = evaluate_bpb(model, get_val_dataloader(), eval_steps, token_bytes, compute_dtype, mesh)
         print0(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
+
+    if (step % eval_metrics_every == 0) or last_step:
+        d0 = time.perf_counter()
+        chat_tasks = ['ARC-Easy', 'MMLU']
+        chat_results = {}
+        for task_name in chat_tasks:
+            acc = run_chat_eval(
+                task_name, model, tokenizer, compute_dtype, mesh,
+                batch_size=8, max_problems=eval_max_problems
+            )
+            chat_results[task_name] = acc
+        dt = time.perf_counter() - d0
+        results_str = " | ".join([f"{task}: {100*acc:.2f}%" for task, acc in chat_results.items()])
+        print0(f"\teval: {results_str} | dt: {dt:.2f}s")
 
 print0(f"Total training time: {(total_training_time / 60):.2f}min")
 save_checkpoint(checkpoint_dir / "model.zarr", model)
