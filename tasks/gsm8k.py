@@ -22,11 +22,11 @@ def extract_answer(completion):
 class GSM8K:
     eval_type = 'generative'
 
-    def __init__(self, subset, split, **kwargs):
+    def __init__(self, subset, split, seed, **kwargs):
         super().__init__(**kwargs)
         assert subset in ["main", "socratic"], "gsm8k subset must be main|socratic"
         assert split in ["train", "test"], "gsm8k split must be train|test"
-        self.ds = load_dataset("openai/gsm8k", subset, split=split).shuffle(seed=42)
+        self.ds = load_dataset("openai/gsm8k", subset, split=split).shuffle(seed=seed)
 
     def __len__(self):
         return len(self.ds)

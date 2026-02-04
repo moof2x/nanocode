@@ -95,7 +95,7 @@ last_step = False
 train_ds = TaskMixture([
     SmolTalk("train", seed), # 460K rows
     Dolly("train", seed), # 10K rows
-    MMLU("train", seed) # 100K rows
+    MMLU("auxiliary_train", "train", seed) # 100K rows
 ], seed)
 
 val_ds = TaskMixture([

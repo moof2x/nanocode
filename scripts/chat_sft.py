@@ -20,6 +20,8 @@ from tasks.dolly import Dolly
 from tasks.mixture import TaskMixture
 from tasks.mmlu import MMLU
 from tasks.smoltalk import SmolTalk
+from tasks.json_dataset import JSONDataset
+from tasks.gsm8k import GSM8K
 
 # distributed setup
 world_size, mesh = init_distributed()
@@ -35,10 +37,10 @@ num_epochs = 1
 # learning rates
 eps = 1e-10
 wd = 0.0
-wte_lr = 0.2
+wte_lr = 0.3
 lm_head_lr = 0.004
 lr = 0.02
-init_lr_frac = 0.02
+init_lr_frac = 1
 
 ### misc
 seed = 42
@@ -48,8 +50,6 @@ compute_dtype = jnp.bfloat16
 ### training loop control
 sample_every = 50
 eval_every = 50
-eval_metrics_every = 200
-eval_max_problems = 1024
 profile_every = 500
 
 config_keys = [k for k,v in globals().items() if not k.startswith("_") and isinstance(v, (int, float, bool, str))] + ["compute_dtype"]
@@ -100,11 +100,20 @@ grad_fn = jax.value_and_grad(calculate_loss, argnums=2)
 
 model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 
-train_ds = TaskMixture([
-    SmolTalk("train", seed),  # 460*0.05=23K rows
-    Dolly("train", seed),  # 10*0.1=1K rows
-    MMLU("auxiliary_train", "train"),  # 100*0.05=5K rows
-], seed)
+train_ds = TaskMixture(
+    [
+        SmolTalk("train", seed),  # 460*0.05=23K rows
+        Dolly("train", seed),  # 10*0.1=1K rows
+        MMLU("auxiliary_train", "train", seed),  # 100*0.05=5K rows,
+        GSM8K("main", "train", seed), # 8K rows teaching simple math and (calculator) tool use
+        GSM8K("main", "train", seed), # 2 epochs of GSM8K
+        JSONDataset("rollouts/rollouts.jsonl"),  # 2000 rows
+        JSONDataset("rollouts/rollouts.jsonl"),  # let's add three epochs of these
+        JSONDataset("rollouts/rollouts.jsonl"),
+        GSM
+    ],
+    seed,
+)
 
 val_ds = TaskMixture([SmolTalk("test", seed),], seed)
 
@@ -150,7 +159,7 @@ def dataloader(dataset, B, T, tokenizer, buffer_size=100):
             row_mask = []
 
             while len(row_ids) < row_capacity:
-                while len(conv_buffer) < buffer_size and cursor < len(dataset) + jax.process_count():
+                while len(conv_buffer) < buffer_size:
                     refill_buffer()
 
                 if not conv_buffer:
@@ -199,8 +208,9 @@ if num_steps < 0:
 
 
 def get_lr_multiplier(step):
-    # linear lr decay
-    return 1 - step / num_steps
+    # linear lr decay - flat for first 80% then ramp down
+    progress = step / num_steps
+    return 1 if progress < 0.8 else 1 - (progress - 0.8) / 0.2
 
 
 # we construct a PartitionSpec with default behaviour indicating to replicate for our model and optimizer states
@@ -319,20 +329,6 @@ for step in range(num_steps):
         eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size)
         val_bpb = evaluate_bpb(model, get_val_dataloader(), eval_steps, token_bytes, compute_dtype, mesh)
         print0(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
-
-    if (step % eval_metrics_every == 0) or last_step:
-        d0 = time.perf_counter()
-        chat_tasks = ['ARC-Easy', 'MMLU']
-        chat_results = {}
-        for task_name in chat_tasks:
-            acc = run_chat_eval(
-                task_name, model, tokenizer, compute_dtype, mesh,
-                batch_size=8, max_problems=eval_max_problems
-            )
-            chat_results[task_name] = acc
-        dt = time.perf_counter() - d0
-        results_str = " | ".join([f"{task}: {100*acc:.2f}%" for task, acc in chat_results.items()])
-        print0(f"\teval: {results_str} | dt: {dt:.2f}s")
 
 print0(f"Total training time: {(total_training_time / 60):.2f}min")
 save_checkpoint(checkpoint_dir / "model.zarr", model)

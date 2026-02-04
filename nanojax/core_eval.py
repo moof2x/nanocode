@@ -8,7 +8,7 @@ from functools import partial
 from jinja2 import Template
 import jax
 import jax.numpy as jnp
-
+import numpy as np
 
 def render_prompts_mc(item, continuation_delimiter, fewshot_examples=None):
     """render complete prompts for a multiple choice question"""
@@ -85,12 +85,16 @@ def find_common_length(token_sequences, direction='left'):
 
 
 def stack_sequences(tokens, pad_token_id):
-    """stack up a list of token sequences, pad to longest on the right"""
+    # stack a list of sequences and pad to one of bucket sizes for JIT compatibility
+    bucket_sizes = (256, 512, 1024, 2048, 4096)
+
     bsz, seq_len = len(tokens), max(len(x) for x in tokens)
-    input_ids = jnp.full((bsz, seq_len), pad_token_id, dtype=jnp.int32)
+    seq_len = min(b for b in bucket_sizes if b >= seq_len)
+    
+    input_ids = np.full((bsz, seq_len), pad_token_id, dtype=jnp.int32)    
     for i, x in enumerate(tokens):
-        input_ids = input_ids.at[i, :len(x)].set(jnp.array(x, dtype=jnp.int32))
-    return input_ids
+        input_ids[i, :len(x)] = np.array(x, dtype=jnp.int32)
+    return jnp.asarray(input_ids)
 
 
 def batch_sequences_mc(tokenizer, prompts):
@@ -181,9 +185,7 @@ def evaluate_example(idx, model, tokenizer, data, task_meta, compute_dtype):
 
     pad_token_id = tokenizer.get_bos_token_id()
     input_ids = stack_sequences(tokens, pad_token_id)
-
     losses, predictions = forward_model_jax(input_ids, model, compute_dtype)
-
     if task_type == 'language_modeling':
         si = start_idxs[0]
         ei = end_idxs[0]

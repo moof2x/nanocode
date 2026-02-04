@@ -9,11 +9,11 @@ from tasks.common import render_mc
 class ARC:
     eval_type = 'categorical'
 
-    def __init__(self, subset, split, **kwargs):
+    def __init__(self, subset, split, seed, **kwargs):
         super().__init__(**kwargs)
         assert subset in ["ARC-Easy", "ARC-Challenge"], "arc subset must be arc-easy or arc-challenge"
         assert split in ["train", "validation", "test"], "arc split must be train|validation|test"
-        self.ds = load_dataset("allenai/ai2_arc", subset, split=split).shuffle(seed=42)
+        self.ds = load_dataset("allenai/ai2_arc", subset, split=split).shuffle(seed=seed)
 
     def __len__(self):
         return len(self.ds)

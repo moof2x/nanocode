@@ -16,7 +16,7 @@ from tasks.gsm8k import GSM8K
 from tasks.humaneval import HumanEval
 
 
-def run_generative_eval(task_object, tokenizer, model, num_samples, max_new_tokens, temperature, compute_dtype, mesh, max_problems=None):
+def run_generative_eval(task_object, tokenizer, model, num_samples, max_new_tokens, temperature, compute_dtype, max_problems=None):
     num_problems = len(task_object) if max_problems is None else min(len(task_object), max_problems)
 
     num_passed, total = 0, 0
@@ -51,16 +51,16 @@ def run_generative_eval(task_object, tokenizer, model, num_samples, max_new_toke
         total += 1
         num_passed += int(passed)
 
-        print(f"\r\033[k{num_passed}/{total} ({100*num_passed/total:.2f}%)", end='', flush=True)
+        print(f"passed/total: \r\033[k{num_passed}/{total} ({100*num_passed/total:.2f}%)", end='', flush=True)
 
     print()
     print0("=" * 50)
-    print0(f"final: {num_passed}/{total} ({100*num_passed/total:.2f}%)")
+    print0(f"final passed/total: {num_passed}/{total} ({100*num_passed/total:.2f}%)")
 
     return num_passed/total
 
 
-def run_categorical_eval(task_object, tokenizer, model, batch_size, compute_dtype, mesh, max_problems=None):
+def run_categorical_eval(task_object, tokenizer, model, batch_size, compute_dtype, max_problems=None):
     bos = tokenizer.get_bos_token_id()
 
     num_problems = len(task_object) if max_problems is None else min(len(task_object), max_problems)
@@ -76,6 +76,10 @@ def run_categorical_eval(task_object, tokenizer, model, batch_size, compute_dtyp
         conversations = [task_object[ii] for ii in range(i0, i1)]
         prompt_ids = [tokenizer.render_for_completion(conversation) for conversation in conversations]
         max_length = max(len(ids) for ids in prompt_ids)
+        # pad to one of the below bucket sizes for JIT compatibility
+        bucket_sizes = (256, 512, 1024, 2048)
+        max_length = min(b for b in bucket_sizes if b >= max_length)
+        
         answer_time_positions = [len(ids) - 1 for ids in prompt_ids]
         padded_prompt_ids = [ids + [bos] * (max_length - len(ids)) for ids in prompt_ids]
         prompt_ids_array = jnp.array(padded_prompt_ids, dtype=jnp.int32)
@@ -106,24 +110,24 @@ def run_categorical_eval(task_object, tokenizer, model, batch_size, compute_dtyp
     return average
 
 
-def run_chat_eval(task_name, model, tokenizer, compute_dtype, mesh,
+def run_chat_eval(task_name, model, tokenizer, compute_dtype, seed,
                    batch_size=1, num_samples=1, max_new_tokens=512, temperature=0.0,
                    max_problems=None):
     task_module = {
-        'MMLU': partial(MMLU, subset="all", split="test"),
-        'ARC-Easy': partial(ARC, subset="ARC-Easy", split="test"),
-        'ARC-Challenge': partial(ARC, subset="ARC-Challenge", split="test"),
-        'GSM8K': partial(GSM8K, subset="main", split="test"),
-        'HumanEval': HumanEval,
+        'MMLU': partial(MMLU, subset="all", split="test", seed=seed),
+        'ARC-Easy': partial(ARC, subset="ARC-Easy", split="test", seed=seed),
+        'ARC-Challenge': partial(ARC, subset="ARC-Challenge", split="test", seed=seed),
+        'GSM8K': partial(GSM8K, subset="main", split="test", seed=seed),
+        'HumanEval': partial(HumanEval, seed=seed),
     }[task_name]
-    task_object = task_module()
+    task = task_module()
 
-    if task_object.eval_type == 'generative':
-        acc = run_generative_eval(task_object, tokenizer, model, num_samples, max_new_tokens, temperature, compute_dtype, mesh, max_problems=max_problems)
-    elif task_object.eval_type == 'categorical':
-        acc = run_categorical_eval(task_object, tokenizer, model, batch_size, compute_dtype, mesh, max_problems=max_problems)
+    if task.eval_type == 'generative':
+        acc = run_generative_eval(task, tokenizer, model, num_samples, max_new_tokens, temperature, compute_dtype, max_problems=max_problems)
+    elif task.eval_type == 'categorical':
+        acc = run_categorical_eval(task, tokenizer, model, batch_size, compute_dtype, max_problems=max_problems)
     else:
-        raise ValueError(f"unsupported task evaluation type: {task_object.eval_type}")
+        raise ValueError(f"unsupported task evaluation type: {task.eval_type}")
     return acc
 
 
@@ -139,16 +143,15 @@ if __name__ == "__main__":
     parser.add_argument('--max-problems', type=int, default=None, help='max problems to evaluate')
     args = parser.parse_args()
 
-    world_size, mesh = init_distributed()
-
     compute_dtype = jnp.bfloat16 if args.compute_dtype == 'bfloat16' else jnp.float32
 
     base_dir = get_base_dir()
     checkpoint_dir = base_dir / f"{args.checkpoint}_checkpoints"
     model_cfg = load_model_config(checkpoint_dir / "model.zarr")
 
-    print0(f"loading model from {checkpoint_dir}")
-    rng = jax.random.key(42)
+    print0(f"Loading model from {checkpoint_dir}")
+    seed = 42
+    rng = jax.random.key(seed)
     model = GPT.init(model_cfg, rng)
     model = load_checkpoint(checkpoint_dir / "model.zarr", model)
 
@@ -156,11 +159,11 @@ if __name__ == "__main__":
 
     all_tasks = ['ARC-Easy', 'ARC-Challenge', 'MMLU', 'GSM8K', 'HumanEval']
     baseline_accuracies = {
-        'ARC-Easy': 0.25,
-        'ARC-Challenge': 0.25,
-        'MMLU': 0.25,
-        'GSM8K': 0.0,
-        'HumanEval': 0.0,
+        'ARC-Easy': 0.25, # multiple choice 1 of 4 => 25%
+        'ARC-Challenge': 0.25, # multiple choice 1 of 4 => 25%
+        'MMLU': 0.25, # multiple choice 1 of 4 => 25%
+        'GSM8K': 0.0, # open-ended => 0%
+        'HumanEval': 0.0, # open-ended => 0%
     }
     task_names = all_tasks if args.task_name is None else args.task_name.split('|')
 
@@ -168,7 +171,10 @@ if __name__ == "__main__":
     for task_name in task_names:
         acc = run_chat_eval(
             task_name,
-            model, tokenizer, compute_dtype, mesh,
+            model,
+            tokenizer,
+            compute_dtype,
+            seed,
             batch_size=args.batch_size,
             num_samples=args.num_samples,
             max_new_tokens=args.max_new_tokens,
@@ -186,4 +192,4 @@ if __name__ == "__main__":
             centered_acc = (acc - baseline_acc) / (1.0 - baseline_acc)
             centered_mean += centered_acc
         chatcore_metric = centered_mean / len(results)
-        print0(f"chatcore metric: {chatcore_metric:.4f}")
+        print0(f"ChatCORE metric: {chatcore_metric:.4f}")
