@@ -88,7 +88,7 @@ model = GPT.init(
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
 print0(f"{num_params} model parameters")
 if num_steps < 0:
-    total_tokens = num_params * 12 
+    total_tokens = num_params * 8
     num_steps = math.ceil(total_tokens / max_seq_len / (batch_size * world_size)) + 1
 else:
     total_tokens = num_steps * max_seq_len * (batch_size * world_size)
@@ -173,12 +173,14 @@ while True:
 
     print0(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | | tkps: {tkps} | mfu: {mfu:.2f} | min ETA: {eta:.1f} min | lr_multiplier: {lr_multiplier:.3f}")
 
-    if step > 0:
-        if (step % profile_every == 0) or last_step:
-            memory_stats = jax.local_devices()[0].memory_stats() or {}
-            used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
-            print0(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
+    if (step % profile_every == 0) or last_step:
+        memory_stats = jax.local_devices()[0].memory_stats() or {}
+        used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
+        print0(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
 
+    
+    # if step > 0:
+    if False:
         if (step % sample_every == 0) or last_step:
             for idx in prompt_idx:
                 new_tokens = generate(
@@ -210,6 +212,7 @@ while True:
         break
 
 print0(f"Total training time: {(total_training_time/60):.2f}min")
+exit()
 save_checkpoint(checkpoint_dir / "model.zarr", model)
 save_checkpoint(checkpoint_dir / "state.zarr", state)
 print0(f"Model (model.zarr) and optimizer state (state.zarr) checkpoints saved to {checkpoint_dir}.")

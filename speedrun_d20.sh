@@ -15,7 +15,7 @@ rm -f /tmp/libtpu_lockfile
 python -m nanojax.dataset -n 248
 
 if [ ! -d "$NANOJAX_BASE_DIR/tokenizer" ]; then
-    python -m scripts.tok_train --max_chars=2000000000 --vocab_size=65536
+    python -m scripts.tok_train --max_chars=2000000000 --vocab_size=32768
     python -m scripts.tok_eval
 fi
 python -u -m scripts.base_train \

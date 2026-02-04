@@ -110,7 +110,6 @@ train_ds = TaskMixture(
         JSONDataset("rollouts/rollouts.jsonl"),  # 2000 rows
         JSONDataset("rollouts/rollouts.jsonl"),  # let's add three epochs of these
         JSONDataset("rollouts/rollouts.jsonl"),
-        GSM
     ],
     seed,
 )
