@@ -122,95 +122,160 @@ def batch_sequences_lm(tokenizer, prompts):
     return [tokens_with], [start_idx], [end_idx]
 
 
-@partial(jax.jit, static_argnames=['compute_dtype'])
-def forward_model_jax(input_ids, model, compute_dtype):
-    """
-    take BxT tensor of token ids, return BxT tensor of losses and argmax predictions.
-    the last column of losses is set to nan because we don't have autoregressive targets there.
-    """
-    batch_size, seq_len = input_ids.shape
-    logits, _ = model.forward(input_ids, compute_dtype=compute_dtype)
-    target_ids = jnp.roll(input_ids, -1, axis=1)
+# def forward_model_jax(input_ids, model, compute_dtype, mesh):
 
-    log_probs = jax.nn.log_softmax(logits, axis=-1)
-    losses = -jnp.take_along_axis(log_probs, target_ids[:, :, None], axis=-1).squeeze(-1)
-    losses = losses.at[:, -1].set(jnp.nan)
-
-    predictions = jnp.argmax(logits, axis=-1)
-    return losses, predictions
+#     return _forward(input_ids, model,)
 
 
-def evaluate_example(idx, model, tokenizer, data, task_meta, compute_dtype):
-    """evaluate a single example, return true if correct, false otherwise"""
-    item = data[idx]
+
+
+
+def extract_correctness(losses, predictions, metadata, examples, task_meta, input_ids):
+    correct = []
+    num_seqs_per_example = metadata['num_seqs_per_example']
+    start_idxs = metadata['start_idxs']
+    end_idxs = metadata['end_idxs']
+    task_type = task_meta['task_type']
+
+    seq_idx = 0
+    for i, example in enumerate(examples):
+        num_seqs = num_seqs_per_example[i]
+        example_losses = losses[seq_idx:seq_idx+num_seqs]
+        example_preds = predictions[seq_idx:seq_idx+num_seqs]
+        example_start_idxs = start_idxs[seq_idx:seq_idx+num_seqs]
+        example_end_idxs = end_idxs[seq_idx:seq_idx+num_seqs]
+        example_input_ids = input_ids[seq_idx:seq_idx+num_seqs]
+
+        if task_type == 'language_modeling':
+            si = example_start_idxs[0]
+            ei = example_end_idxs[0]
+            predicted_tokens = example_preds[0, si-1:ei-1]
+            actual_tokens = example_input_ids[0, si:ei]
+            is_correct = bool(jnp.all(predicted_tokens == actual_tokens))
+        elif task_type in ['multiple_choice', 'schema']:
+            mean_losses = [float(jnp.nanmean(example_losses[j, si-1:ei-1]))
+                          for j, (si, ei) in enumerate(zip(example_start_idxs, example_end_idxs))]
+            pred_idx = mean_losses.index(min(mean_losses))
+            is_correct = pred_idx == example['gold']
+        else:
+            raise ValueError(f"unsupported task type: {task_type}")
+
+        correct.append(float(is_correct))
+        seq_idx += num_seqs
+
+    return correct
+
+def prepare_batch(examples, tokenizer, task_meta, max_seq_len, data):
+    ids = []
+    all_start_idxs = []
+    all_end_idxs = []
+    num_seqs_per_example = []
+
     task_type = task_meta['task_type']
     num_fewshot = task_meta['num_fewshot']
     continuation_delimiter = task_meta['continuation_delimiter']
 
-    fewshot_examples = []
-    if num_fewshot > 0:
-        rng = random.Random(1234 + idx)
-        available_indices = [i for i in range(len(data)) if i != idx]
-        fewshot_indices = rng.sample(available_indices, num_fewshot)
-        fewshot_examples = [data[i] for i in fewshot_indices]
+    for idx, example in enumerate(examples):
+        fewshot_examples = []
+        if num_fewshot > 0:
+            global_idx = data.index(example)
+            rng = random.Random(1234 + global_idx)
+            available_indices = [i for i in range(len(data)) if i != global_idx]
+            fewshot_indices = rng.sample(available_indices, num_fewshot)
+            fewshot_examples = [data[i] for i in fewshot_indices]
 
-    if task_type == 'multiple_choice':
-        prompts = render_prompts_mc(item, continuation_delimiter, fewshot_examples)
-        tokens, start_idxs, end_idxs = batch_sequences_mc(tokenizer, prompts)
-    elif task_type == 'schema':
-        prompts = render_prompts_schema(item, continuation_delimiter, fewshot_examples)
-        tokens, start_idxs, end_idxs = batch_sequences_schema(tokenizer, prompts)
-    elif task_type == 'language_modeling':
-        prompts = render_prompts_lm(item, continuation_delimiter, fewshot_examples)
-        tokens, start_idxs, end_idxs = batch_sequences_lm(tokenizer, prompts)
-    else:
-        raise ValueError(f"unsupported task type: {task_type}")
+        if task_type == 'multiple_choice':
+            prompts = render_prompts_mc(example, continuation_delimiter, fewshot_examples)
+            tokens, start_idxs, end_idxs = batch_sequences_mc(tokenizer, prompts)
+        elif task_type == 'schema':
+            prompts = render_prompts_schema(example, continuation_delimiter, fewshot_examples)
+            tokens, start_idxs, end_idxs = batch_sequences_schema(tokenizer, prompts)
+        elif task_type == 'language_modeling':
+            prompts = render_prompts_lm(example, continuation_delimiter, fewshot_examples)
+            tokens, start_idxs, end_idxs = batch_sequences_lm(tokenizer, prompts)
+        else:
+            raise ValueError(f"unsupported task type: {task_type}")
 
-    if hasattr(model, 'cfg') and hasattr(model.cfg, 'sequence_len') and model.cfg.sequence_len is not None:
-        max_tokens = model.cfg.sequence_len
         new_tokens, new_start_idxs, new_end_idxs = [], [], []
         for t, s, e in zip(tokens, start_idxs, end_idxs):
-            if len(t) > max_tokens:
-                num_to_crop = len(t) - max_tokens
-                new_tokens.append(t[-max_tokens:])
+            if len(t) > max_seq_len:
+                num_to_crop = len(t) - max_seq_len
+                new_tokens.append(t[-max_seq_len:])
                 new_start_idxs.append(s - num_to_crop)
                 new_end_idxs.append(e - num_to_crop)
-                assert s - num_to_crop >= 0, "this should never happen right?"
-                assert e - num_to_crop >= 0, "this should never happen right?"
+                assert s - num_to_crop >= 0
+                assert e - num_to_crop >= 0
             else:
                 new_tokens.append(t)
                 new_start_idxs.append(s)
                 new_end_idxs.append(e)
-        tokens, start_idxs, end_idxs = new_tokens, new_start_idxs, new_end_idxs
+
+        all_tokens.extend(new_tokens)
+        all_start_idxs.extend(new_start_idxs)
+        all_end_idxs.extend(new_end_idxs)
+        num_seqs_per_example.append(len(new_tokens))
 
     pad_token_id = tokenizer.get_bos_token_id()
-    input_ids = stack_sequences(tokens, pad_token_id)
-    losses, predictions = forward_model_jax(input_ids, model, compute_dtype)
-    if task_type == 'language_modeling':
-        si = start_idxs[0]
-        ei = end_idxs[0]
-        predicted_tokens = predictions[0, si-1:ei-1]
-        actual_tokens = input_ids[0, si:ei]
-        is_correct = bool(jnp.all(predicted_tokens == actual_tokens))
-    elif task_type in ['multiple_choice', 'schema']:
-        mean_losses = [float(jnp.nanmean(losses[i, si-1:ei-1]))
-                        for i, (si, ei) in enumerate(zip(start_idxs, end_idxs))]
-        pred_idx = mean_losses.index(min(mean_losses))
-        is_correct = pred_idx == item['gold']
-    else:
-        raise ValueError(f"unsupported task type: {task_type}")
+    input_ids = stack_sequences(all_tokens, pad_token_id)
 
-    return is_correct
+    return input_ids, {
+        'num_seqs_per_example': num_seqs_per_example,
+        'start_idxs': all_start_idxs,
+        'end_idxs': all_end_idxs,
+    }
 
+def evaluate_task(model, tokenizer, data, minibatch_size, task_meta, compute_dtype, mesh):
+    world_size, rank = jax.process_count(), jax.process_index()
+    minibatch_size *= jax.local_device_count()
+    ignore_idx = tokenizer.get_bos_token_id()
+    
+    @jax.jit
+    @jax.shard_map(
+        mesh=mesh,
+        in_specs=(
+            jax.P("b", None), 
+            jax.tree.map(lambda _: jax.P(), model) 
+        ),
+        out_specs=(
+            jax.P("b", None),
+            jax.P("b", None)
+        ),
+        check_vma=False
+    )
+    def eval_forward(idx, model):
+        logits, _ = model.forward(idx, compute_dtype=compute_dtype)
+        targets = jnp.roll(idx, -1, axis=1)
 
-def evaluate_task(model, tokenizer, data, task_meta, compute_dtype):
-    """
-    evaluate one task across many examples.
-    """
-    correct = []
-    for idx in range(len(data)):
-        is_correct = evaluate_example(idx, model, tokenizer, data, task_meta, compute_dtype)
-        correct.append(float(is_correct))
+        logsumexp = jax.nn.logsumexp(logits.astype(jnp.float32))
+        valid_targets = jnp.not_equal(targets, ignore_idx)
+        loss = -jnp.take_along_axis(logits, targets[:, :, None], axis=-1).squeeze(-1) + logsumexp
+        loss = jnp.where(valid_targets, loss, 0.0)
 
-    mean_correct = sum(correct) / len(correct)
-    return mean_correct
+        preds = jnp.argmax(logits, axis=-1)
+        return loss, preds
+
+    all_correct = []
+    sharding = jax.NamedSharding(mesh, jax.P("b", None))
+    for i in range(rank, len(data), minibatch_size):
+        # each process collects data for all of its local devices
+        batch_data = data[i:(i + 1) * minibatch_size]
+
+        ids, meta = prepare_batch(
+            batch_data, tokenizer, task_meta, model.cfg.sequence_len, data
+        )
+
+        # create a sharded global view of our data across the entire world size
+        global_batch_size = ids.shape[0] * world_size
+        ids = jax.make_array_from_process_local_data(
+            sharding, ids,
+            global_shape=(global_batch_size, ids.shape[1])
+        )
+
+        loss, preds= eval_forward(ids, model)
+
+        is_correct = extract_correctness(
+            loss, preds, meta, batch_data, task_meta, ids
+        )
+        all_correct.extend(is_correct)
+
+    return sum(all_correct) / len(all_correct) if all_correct else 0.0

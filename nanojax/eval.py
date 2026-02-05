@@ -16,7 +16,8 @@ def evaluate_bpb(model, dataloader, steps, token_bytes, compute_dtype, mesh):
             jax.P("b", None),    
             jax.P(),  
         ),
-        out_specs=(jax.P(), jax.P())
+        out_specs=(jax.P(), jax.P()),
+        check_vma=False
     )
     def eval_step(model, x, y, token_bytes):
         loss = calculate_loss(x, y, model, compute_dtype=compute_dtype, reduce=False).flatten()
