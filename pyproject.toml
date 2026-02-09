@@ -17,7 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 cuda = ["jax[cuda12]"]
 cpu = ["jax"]
-tpu = ["jax[tpu]", "libtpu"]
+tpu = ["jax", "jaxlib", "libtpu", "requests"]
 
 [tool.uv]
 find-links = [
