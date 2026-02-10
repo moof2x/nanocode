@@ -1,3 +1,6 @@
+"""
+Mostly copied from nanochat/scripts/base_eval.py
+"""
 import os
 import csv
 import time
@@ -40,7 +43,7 @@ def place_eval_bundle(file_path):
     print0(f"placed eval_bundle directory at {eval_bundle_dir}")
 
 
-def evaluate_model(model, tokenizer, compute_dtype, max_per_task=-1):
+def evaluate_model(model, tokenizer, minibatch_size, compute_dtype, mesh, max_per_task=-1):
     """
     evaluate a base model on the core benchmark.
     """
@@ -79,7 +82,7 @@ def evaluate_model(model, tokenizer, compute_dtype, max_per_task=-1):
             'num_fewshot': task['num_fewshot'][0],
             'continuation_delimiter': task.get('continuation_delimiter', ' ')
         }
-        print0(f"evaluating: {label} ({task_meta['num_fewshot']}-shot, type: {task_meta['task_type']})... ", end='')
+        print0(f"Evaluating: {label} ({task_meta['num_fewshot']}-shot, type: {task_meta['task_type']})... ", end='')
 
         data_path = data_base_path / task_meta['dataset_uri']
         with open(data_path, 'r', encoding='utf-8') as f:
@@ -90,8 +93,7 @@ def evaluate_model(model, tokenizer, compute_dtype, max_per_task=-1):
         if max_per_task > 0:
             data = data[:max_per_task]
 
-        accuracy = evaluate_task(model, tokenizer, data, task_meta, compute_dtype)
-
+        accuracy = evaluate_task(model, tokenizer, minibatch_size, data, task_meta, compute_dtype, mesh)
         results[label] = accuracy
         random_baseline = random_baselines[label]
         centered_result = (accuracy - 0.01 * random_baseline) / (1.0 - 0.01 * random_baseline)
@@ -131,7 +133,8 @@ def main():
 
     tokenizer = get_tokenizer()
 
-    out = evaluate_model(model, tokenizer, compute_dtype, max_per_task=args.max_per_task)
+    minibatch_size = 1
+    out = evaluate_model(model, tokenizer, minibatch_size, compute_dtype, mesh, max_per_task=args.max_per_task)
 
     if jax.process_index() == 0:
         output_csv_path = base_dir / "base_eval" / f"{args.checkpoint}.csv"
