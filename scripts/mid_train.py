@@ -79,9 +79,13 @@ model = GPT.init(
     config,
     rng
 )
+
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
-print0(f"{num_params} model parameters")
-print0("="*20)
+print0(f"{num_params/1e6}M model parameters")
+for name, layer in [("wte", model.wte), ("h", model.h),("lm_head", model.lm_head)]:
+    num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, layer))
+    print0(f"  {num_params/1e6}M {name} parameters")
+
 
 num_flops_per_token = estimate_flops(model)
 print0(f"Estimated FLOPs per token: {num_flops_per_token}")
@@ -152,7 +156,7 @@ in_specs = (jax.P("b", None), jax.P("b", None), model_spec, state_spec, jax.P())
 out_specs = (model_spec, state_spec, jax.P())
 
 @jax.jit(donate_argnums=(2, 3))
-@jax.shard_map(in_specs=in_specs, out_specs=out_specs, mesh=mesh)
+@jax.shard_map(in_specs=in_specs, out_specs=out_specs, mesh=mesh, check_vma=False)
 def train_step(idx, targets, model, state, lr_multiplier):
     def inner_step(carry, j):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)

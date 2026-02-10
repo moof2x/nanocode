@@ -33,29 +33,40 @@ class GSM8K:
 
     def __getitem__(self, idx):
         row = self.ds[idx]
-        question = row['question']
-        answer = row['answer']
-        assistant_message_parts = []
-        parts = re.split(r'(<<[^>]+>>)', answer)
+        parts = re.split(r'(<<[^>]+>>)', row["answer"])
+        messages = [{"role": "user", "content": row["question"]}]
+        content = ""
+        
+        # we're going to split this into our nanojax-agent tool calling format
         for part in parts:
             if part.startswith('<<') and part.endswith('>>'):
-                inner = part[2:-2]
-                if '=' in inner:
-                    expr, result = inner.rsplit('=', 1)
-                else:
-                    expr, result = inner, ""
-                assistant_message_parts.append({"type": "python", "text": expr})
-                assistant_message_parts.append({"type": "python_output", "text": result})
+                inner = part[2:-2] # strip << >>
+                expr, result = inner.rsplit("=", 1)
+                tool_call = {
+                    "role": "assistant",                    
+                    "content": content.lower(), 
+                    "tool_call": {
+                        "name": "Bash",
+                        "args": {"command": f"python3 -c 'print({expr})'"}
+                    }
+                    
+                }
+                tool_result = {
+                    "role": "tool_result",
+                    "content": result.strip()
+                }
+                messages.append(tool_call)
+                messages.append(tool_result)
+                content = ""
             else:
-                assistant_message_parts.append({"type": "text", "text": part})
-        messages = [
-            {"role": "user", "content": question},
-            {"role": "assistant", "content": assistant_message_parts},
-        ]
-        conversation = {
-            "messages": messages,
-        }
-        return conversation
+                # accumulate the model's thinking 
+                content += part
+        if content:
+            messages.append({
+                "role": "assistant",
+                "content": content.lower().strip()                    
+            })
+        return {"messages": messages}
 
     def evaluate(self, conversation, assistant_response):
         assert isinstance(assistant_response, str), "assuming simple string response for now"

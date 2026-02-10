@@ -26,7 +26,7 @@ from tasks.gsm8k import GSM8K
 # distributed setup
 world_size, mesh = init_distributed()
 
-checkpoint = "mid"
+checkpoint = "base"
 
 ### optimization hparams
 batch_size = 32
@@ -46,6 +46,7 @@ init_lr_frac = 1
 seed = 42
 accelerator_flops = 11.15e12  # 2080 super FLOPs/sec
 compute_dtype = jnp.bfloat16
+attn_impl = "splash"
 
 ### training loop control
 sample_every = 50
@@ -80,10 +81,13 @@ accelerator_flops *= world_size
 print0(f"World size: {world_size}")
 
 assert vocab_size == config.vocab_size, f"mismatch between tokenizer vocab_size ({vocab_size}) and config vocab_size ({config.vocab_size})"
-model = GPT.init(config, rng)
+model = GPT.init(config, rng, attn_impl)
+
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
-print0(f"{num_params} model parameters")
-print0("=" * 20)
+print0(f"{num_params/1e6}M model parameters")
+for name, layer in [("wte", model.wte), ("h", model.h),("lm_head", model.lm_head)]:
+    num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, layer))
+    print0(f"  {num_params/1e6}M {name} parameters")
 
 num_flops_per_token = estimate_flops(model)
 print0(f"Estimated FLOPs per token: {num_flops_per_token}")
@@ -114,7 +118,11 @@ train_ds = TaskMixture(
     seed,
 )
 
-val_ds = TaskMixture([SmolTalk("test", seed),], seed)
+val_ds = TaskMixture([
+    SmolTalk("test", seed),
+    MMLU("all", "test", seed),
+    GSM8K(subset="main", split="test", seed=seed)
+], seed)
 
 
 def dataloader(dataset, B, T, tokenizer, buffer_size=100):
@@ -131,7 +139,12 @@ def dataloader(dataset, B, T, tokenizer, buffer_size=100):
             if cursor >= len(dataset):
                 cursor = jax.process_index()
             conversation = dataset[cursor]
-            ids, mask = tokenizer.render_conversation(conversation, max_tokens=T + 1)
+            try:
+                ids, mask = tokenizer.render_conversation(conversation, max_tokens=T + 1)
+            except:
+                import ipdb
+                ipdb.set_trace()
+                x = 10
             conv_buffer.append((ids, mask))
             cursor += jax.process_count()
 
@@ -221,7 +234,7 @@ out_specs = (model_spec, state_spec, jax.P(), jax.P())
 
 
 @jax.jit(donate_argnums=(2, 3))
-@jax.shard_map(in_specs=in_specs, out_specs=out_specs, mesh=mesh)
+@jax.shard_map(in_specs=in_specs, out_specs=out_specs, mesh=mesh, check_vma=False)
 def train_step(idx, targets, model, state, lr_multiplier):
     def inner_step(carry, j):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
@@ -240,8 +253,8 @@ def train_step(idx, targets, model, state, lr_multiplier):
         return (loss_accm + loss, jax.tree.map(jnp.add, grads_accm, grads)), None
 
     initial_loss = jax.lax.pcast(0.0, ("b",), to="varying")
-    initial_grads = jax.tree.map(lambda p: jax.lax.pcast(jnp.zeros_like(p), "b", to="varying"), model)
-    
+    # initial_grads = jax.tree.map(lambda p: jax.lax.pcast(jnp.zeros_like(p), "b", to="varying"), model)
+    initial_grads = jax.tree.map(jnp.zeros_like, model)
     # loss_accm = sum_i(n_i * L_i) = sum_i(sum_j(l_i,j))
     # grads_accm = sum_i(n_i * grad(L_i)) = sum_i(sum_j(grad(l_i,j)))
     (loss_accm, grads_accm), _ = jax.lax.scan(inner_step, (initial_loss, initial_grads), jnp.arange(grad_accm_steps))

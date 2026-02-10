@@ -121,7 +121,8 @@ class Muon:
             wte=adamw_update[0],
             h=muon_update,
             lm_head=adamw_update[1],
-            cfg=model.cfg
+            cfg=model.cfg,
+            attn_impl=model.attn_impl
         )
 
         # we only need to update our optimizer states and step counter as the rest of the fields are static

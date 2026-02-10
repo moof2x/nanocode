@@ -41,6 +41,7 @@ lr = 0.02
 seed = 42
 accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
 compute_dtype = jnp.bfloat16
+attn_impl = "splash"
 
 ### training loop control
 sample_every = 50
@@ -82,7 +83,8 @@ get_val_dataloader = lambda: get_distributed_dataloader(minibatch_size, max_seq_
 
 model = GPT.init(
     config,
-    rng
+    rng,
+    attn_impl=attn_impl
 )
     
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
@@ -170,13 +172,16 @@ while True:
     dt = time.perf_counter() - d0
 
     # profiling info
+    eta = -1
+    if step > 1:
+        total_training_time += dt
+        average_time_per_step = total_training_time / step
+        eta = ((num_steps - step) * average_time_per_step) / 60
     flops_per_sec = num_flops_per_token * x.size / dt
     mfu = 100 * flops_per_sec / accelerator_flops
     tkps = int(x.size // dt)
-    eta = ((num_steps - step) * dt) / 60
-    total_training_time += dt
 
-    print0(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | | tkps: {tkps} | mfu: {mfu:.2f} | min ETA: {eta:.1f} min | lr_multiplier: {lr_multiplier:.3f}")
+    print0(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | | tkps: {tkps} | mfu: {mfu:.2f} | ETA: {eta:.1f} min | lr_multiplier: {lr_multiplier:.3f}")
 
     if (step % profile_every == 0) or last_step:
         memory_stats = jax.local_devices()[0].memory_stats() or {}
@@ -200,15 +205,17 @@ while True:
         if (step % eval_every == 0) or last_step:
             d0 = time.perf_counter()
             eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size)
-            val_bpb = evaluate_bpb(model, iter(get_val_dataloader()), eval_steps, token_bytes, compute_dtype, mesh)
+            val_bpb = evaluate_bpb(model, get_val_dataloader(), eval_steps, token_bytes, compute_dtype, mesh)
             print0(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
 
-        if (step % core_metric_every == 0) or last_step:
+        # only run CORE on rank 0 in multi-node
+        if ((step % core_metric_every == 0) or last_step) and jax.process_index() == 0:
             d0 = time.perf_counter()
             core_results = evaluate_model(model, tokenizer, minibatch_size * 2, compute_dtype, mesh, max_per_task=core_metric_max_per_task)
             core_metric = core_results['core_metric']
             dt = time.perf_counter() - d0
             print0(f"  CORE metric: {core_metric:.4f} | dt: {dt:.2f}s")
+        jax.experimental.multihost_utils.sync_global_devices("CORE")
 
     step += 1
     if step == num_steps:

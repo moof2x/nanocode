@@ -71,7 +71,6 @@ def apply_rope(x: jax.Array, cos: jax.Array, sin: jax.Array) -> jax.Array:
     # stitch our embedding vector back up
     return jnp.concatenate([y1, y2], axis=-1)
 
-@lru_cache(maxsize=1)
 def get_splash_kernel(seq_len: int, n_head: int, n_kv_head: int, head_dim: int):
     from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
     # I've benchmarked these block sizes on a TPUV6e8
@@ -149,7 +148,7 @@ class GPT:
     attn_impl: str # attention implementation: splash (TPU) or eager. TODO add CUDA flash attn
     
     @staticmethod              
-    def init(cfg: GPTConfig, rng: jax.Array, compute_dtype:jnp.dtype=jnp.bfloat16, attn_impl:str="splash") -> "GPT":
+    def init(cfg: GPTConfig, rng: jax.Array, attn_impl:str | None="splash") -> "GPT":
         assert attn_impl in ["splash", "eager"], f"attn_impl ({attn_impl}) must be one of 'splash' or 'eager'"
         n_embed, n_head, n_kv_head = cfg.n_embed, cfg.n_head, cfg.n_kv_head
         head_dim = cfg.n_embed // cfg.n_head
