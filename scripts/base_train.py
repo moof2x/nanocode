@@ -86,7 +86,12 @@ model = GPT.init(
 )
     
 num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, model))
-print0(f"{num_params} model parameters")
+print0(f"{num_params/1e6}M model parameters")
+for name, layer in [("wte", model.wte), ("h", model.h),("lm_head", model.lm_head)]:
+    layer_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, layer))
+    print0(f"  {layer_params/1e6}M {name} parameters")
+
+
 if num_steps < 0:
     total_tokens = num_params * 8
     num_steps = math.ceil(total_tokens / max_seq_len / (batch_size * world_size)) + 1
@@ -121,7 +126,7 @@ in_specs = (jax.P("b", None), jax.P("b", None), model_spec, state_spec, jax.P())
 out_specs = (model_spec, state_spec, jax.P())
 
 @jax.jit(donate_argnums=(2, 3))
-@jax.shard_map(in_specs=in_specs, out_specs=out_specs, mesh=mesh)
+@jax.shard_map(in_specs=in_specs, out_specs=out_specs, mesh=mesh, check_vma=False)
 def train_step(idx, targets, model, state, lr_multiplier):
     def inner_step(carry, j):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
@@ -177,10 +182,8 @@ while True:
         memory_stats = jax.local_devices()[0].memory_stats() or {}
         used, available = memory_stats.get("peak_bytes_reserved", 0) / 1e9, memory_stats.get("bytes_reservable_limit", 0) / 1e9
         print0(f"\tPeak bytes reserved/limit: {used:.2f}/{available:.2f}")
-
     
-    # if step > 0:
-    if False:
+    if step > 0:
         if (step % sample_every == 0) or last_step:
             for idx in prompt_idx:
                 new_tokens = generate(
@@ -202,17 +205,16 @@ while True:
 
         if (step % core_metric_every == 0) or last_step:
             d0 = time.perf_counter()
-            core_results = evaluate_model(model, tokenizer, compute_dtype, max_per_task=core_metric_max_per_task)
+            core_results = evaluate_model(model, tokenizer, minibatch_size * 2, compute_dtype, mesh, max_per_task=core_metric_max_per_task)
             core_metric = core_results['core_metric']
             dt = time.perf_counter() - d0
-            print0(f"\tcore metric: {core_metric:.4f} | dt: {dt:.2f}s")
+            print0(f"  CORE metric: {core_metric:.4f} | dt: {dt:.2f}s")
 
     step += 1
     if step == num_steps:
         break
 
 print0(f"Total training time: {(total_training_time/60):.2f}min")
-exit()
 save_checkpoint(checkpoint_dir / "model.zarr", model)
 save_checkpoint(checkpoint_dir / "state.zarr", state)
 print0(f"Model (model.zarr) and optimizer state (state.zarr) checkpoints saved to {checkpoint_dir}.")

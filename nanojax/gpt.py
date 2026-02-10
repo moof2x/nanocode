@@ -4,18 +4,16 @@
 # This is great for us. In this implementation, we'll separate state (model, optimizer params)
 # from the modeling code itself. We can define the state as a PyTree and all modeling
 # code will be applying transformations on this PyTree (or mapping data through it).
-# if you're wondering about the variable names here and in nanochat
+# If you're wondering about the variable names here and in nanochat
 # they come from https://github.com/openai/gpt-2/blob/master/src/model.py
 
 import itertools
 import operator
 from dataclasses import dataclass, replace
-from functools import partial
-
+from functools import partial, lru_cache
 import jax
 import jax.numpy as jnp
 from jax.tree_util import register_dataclass
-
 # einsum notation:
 #    b: batch
 #    n: n_layer
@@ -73,6 +71,30 @@ def apply_rope(x: jax.Array, cos: jax.Array, sin: jax.Array) -> jax.Array:
     # stitch our embedding vector back up
     return jnp.concatenate([y1, y2], axis=-1)
 
+@lru_cache(maxsize=1)
+def get_splash_kernel(seq_len: int, n_head: int, n_kv_head: int, head_dim: int):
+    from jax.experimental.pallas.ops.tpu.splash_attention import splash_attention_kernel, splash_attention_mask
+    # I've benchmarked these block sizes on a TPUV6e8
+    configs = {
+        4096: (1024, 128), # d24
+        2048: (512, 256),  # d20
+        1024: (256, 256),  # d12
+        512:  (128, 128),  # d6
+        256:  (128, 128),  # d3
+    }
+    bq, bc = configs.get(seq_len, (128, 128))
+
+    return splash_attention_kernel.make_splash_mha(
+        mask=splash_attention_mask.MultiHeadMask(
+            masks=(splash_attention_mask.CausalMask(shape=(seq_len, seq_len)),) * n_head
+        ),
+        head_shards=1, q_seq_shards=1,
+        block_sizes=splash_attention_kernel.BlockSizes(
+            block_q=bq, block_kv=bq, block_kv_compute=bc,
+            block_q_dkv=bq, block_kv_dkv=bq, block_kv_dkv_compute=bc,
+            block_q_dq=bq, block_kv_dq=bq
+        )
+    )
 
 @dataclass
 class GPTConfig:
@@ -108,7 +130,7 @@ class Block:
 @partial(
     register_dataclass,
     data_fields=["wte", "h", "lm_head"],
-    meta_fields=["cfg"]
+    meta_fields=["cfg", "attn_impl"]
 )
 @dataclass
 class GPT:
@@ -124,9 +146,11 @@ class GPT:
     h: list[Block] # n_layer transformer blocks
     lm_head: jax.Array # ev [n_embed, vocab_size] output proj
     cfg: GPTConfig
-
+    attn_impl: str # attention implementation: splash (TPU) or eager. TODO add CUDA flash attn
+    
     @staticmethod              
-    def init(cfg: GPTConfig, rng: jax.Array, compute_dtype=jnp.bfloat16) -> "GPT":
+    def init(cfg: GPTConfig, rng: jax.Array, compute_dtype:jnp.dtype=jnp.bfloat16, attn_impl:str="splash") -> "GPT":
+        assert attn_impl in ["splash", "eager"], f"attn_impl ({attn_impl}) must be one of 'splash' or 'eager'"
         n_embed, n_head, n_kv_head = cfg.n_embed, cfg.n_head, cfg.n_kv_head
         head_dim = cfg.n_embed // cfg.n_head
         # random state must be explicitly managed in JAX by "splitting"
@@ -159,7 +183,8 @@ class GPT:
             wte=wte,
             h=h,
             lm_head=lm_head,
-            cfg=cfg
+            cfg=cfg,
+            attn_impl=attn_impl
         )
         
     def forward(self, idx: jax.Array, mask: jax.Array = None, compute_dtype: jnp.dtype = jnp.bfloat16, kv_cache: KVCache = None):
@@ -217,24 +242,33 @@ class GPT:
             if kv_cache is not None:
                 k, v, kv_cache = kv_cache.update(k, v, i)
 
-            # jax.nn.dot_product_attention will internally transpose which is slow
-            # bsqh -> bqsh
+            # transpose to bqsh for contiguous memory access across sequence dim, as otherwise
+            # XLA inserts expensive transposes when lowering. also splash attention wants bqsh
+            # bsqh -> bqsh 
             q = q.transpose(0, 2, 1, 3)
             k = k.transpose(0, 2, 1, 3)
             v = v.transpose(0, 2, 1, 3)
 
             scale = 1.0 / jnp.sqrt(h)
+            q = q * scale
 
-            attn_weights = jnp.einsum("bnsh,bnth->bnst", q * scale, k)
-            attn_weights = jnp.where(mask, attn_weights, -jnp.inf)
-            attn_weights = jax.nn.softmax(attn_weights.astype(jnp.float32), axis=-1).astype(compute_dtype)
+            # fallback to eager attn for inference (or if configured)
+            if kv_cache is not None or self.attn_impl == "eager":
+                attn_weights = jnp.einsum("bnsh,bnth->bnst", q, k, preferred_element_type=jnp.float32)
+                attn_weights = jnp.where(mask, attn_weights, -jnp.inf)
+                attn_weights = jax.nn.softmax(attn_weights.astype(jnp.float32), axis=-1).astype(compute_dtype)
 
-            # matmul → einsum
-            attn_out = jnp.einsum("bnst,bnth->bsnh", attn_weights, v)
+                attn_out = jnp.einsum("bnst,bnth->bsnh", attn_weights, v)
+            elif self.attn_impl == "splash":
+                splash_kernel = get_splash_kernel(s, cfg.n_head, cfg.n_kv_head, h)
+                # vmap over batch dimension -> bnsh
+                attn_out = jax.vmap(splash_kernel, in_axes=(0, 0, 0, None))(q, k, v, None)
+                # transpose back to bsnh
+                attn_out = attn_out.transpose(0, 2, 1, 3)
 
-            # attn_out = attn_out.transpose(0, 2, 1, 3)
             attn_out = attn_out.reshape(b, s, cfg.n_embed)
             attn_out = jnp.einsum("bse,eE->bsE", attn_out, attn.c_proj.astype(compute_dtype))
+            
             # residual connection with the pre-norm block input
             x = x + attn_out
             
