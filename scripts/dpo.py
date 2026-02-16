@@ -182,7 +182,8 @@ def concatenated_forward(idx, targets, model, ignore_idx: int=-1, compute_dtype:
     # our inputs and targets are comprise an equal number of chosen and rejected samples
     # obtain logprobs for all of these in one go
     logits, _ = model.forward(idx, compute_dtype=compute_dtype)
-    logp = jax.nn.log_softmax(logits.astype(jnp.float32), axis=-1) # bsv
+    logits = logits.astype(jnp.float32)
+    logp = jax.nn.log_softmax(logits, axis=-1) # bsv
     # grab logprobs for all our tokens
     per_token_logp = jnp.take_along_axis(logp, targets[:, :, None], axis=-1).squeeze(-1) # bsv -> bs
     # mask out padding tokens

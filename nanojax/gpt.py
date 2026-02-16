@@ -297,8 +297,9 @@ def estimate_flops(model: GPT) -> float:
 
 def calculate_loss(idx: jax.Array, targets: jax.Array, model: GPT, ignore_idx: int=-1,  compute_dtype: jnp.dtype=jnp.bfloat16, reduce: bool=True) -> jax.Array:
     logits, _ = model.forward(idx, compute_dtype=compute_dtype)
+    logits = logits.astype(jnp.float32)
     # cross entropy loss using logsumexp
-    logsumexp = jax.nn.logsumexp(logits.astype(jnp.float32), axis=-1)
+    logsumexp = jax.nn.logsumexp(logits, axis=-1)
     valid_targets = jnp.not_equal(targets, ignore_idx)
     loss = -jnp.take_along_axis(logits, targets[:, :, None], axis=-1).squeeze(-1) + logsumexp
     loss = jnp.where(valid_targets, loss, 0.0)

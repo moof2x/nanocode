@@ -169,10 +169,11 @@ def eval_forward(idx, masks, model, compute_dtype, ignore_idx, mesh):
     )
     def forward(idx, masks, model):
         logits, _ = model.forward(idx, compute_dtype=compute_dtype)
+        logits = logits.astype(jnp.float32)
         targets = jnp.roll(idx, -1, axis=1)
         target_masks = jnp.roll(masks, -1, axis=1)
 
-        logsumexp = jax.nn.logsumexp(logits.astype(jnp.float32), axis=-1)
+        logsumexp = jax.nn.logsumexp(logits, axis=-1)
         valid_targets = jnp.not_equal(targets, ignore_idx) & target_masks
         loss = -jnp.take_along_axis(logits, targets[:, :, None], axis=-1).squeeze(-1) + logsumexp
         loss = jnp.where(valid_targets, loss, 0.0)
