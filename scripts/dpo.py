@@ -14,7 +14,7 @@ from nanojax.generation import generate
 from nanojax.gpt import GPT, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
-from tasks.dataset import PreferenceDataset
+from tasks.dataset import PreferenceDataset, JSONPreferenceDataset
 from tasks.mixture import TaskMixture
 
 # distributed setup
@@ -101,10 +101,8 @@ state = Muon.init(
 )
 
 train_ds = TaskMixture([
-    PreferenceDataset("smohammadi/hh-rlhf", chosen_messages_key="chosen", rejected_messages_key="rejected",split="train", seed=seed),  # 160*0.05=8K rows,
-    PreferenceDataset("smohammadi/hh-rlhf", chosen_messages_key="chosen", rejected_messages_key="rejected",split="train", seed=seed),  # 160*0.05=8K rows,
-
-    
+    JSONPreferenceDataset("rollouts/all.pref_train.jsonl"),
+    JSONPreferenceDataset("rollouts/preference_rollouts.jsonl"),
 ], seed)
 
 
@@ -211,7 +209,7 @@ def calculate_loss(idx, targets, model, ref_model, ignore_idx: int=-1, compute_d
 grad_fn = jax.value_and_grad(calculate_loss, argnums=2, has_aux=True)
 
 @jax.jit(donate_argnums=(2, 4))
-@jax.shard_map(in_specs=in_specs, out_specs=out_specs, mesh=mesh)
+@jax.shard_map(in_specs=in_specs, out_specs=out_specs, mesh=mesh, check_vma=False)
 def train_step(idx, targets, model, ref_model, state, lr_multiplier):
     def inner_step(carry, j):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
