@@ -17,11 +17,13 @@ from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
 from scripts.chat_eval import run_chat_eval
 from tasks.dolly import Dolly
+from tasks.sequence import TaskSequence
 from tasks.mixture import TaskMixture
 from tasks.mmlu import MMLU
 from tasks.smoltalk import SmolTalk
 from tasks.json_dataset import JSONDataset
 from tasks.gsm8k import GSM8K
+from tasks.dataset import Dataset
 
 # distributed setup
 world_size, mesh = init_distributed()
@@ -104,24 +106,33 @@ grad_fn = jax.value_and_grad(calculate_loss, argnums=2)
 
 model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 
+# our curriculum will begin with general chat/instruction following and graduate to code+agentic tasks
 train_ds = TaskMixture(
     [
-        SmolTalk("train", seed),  # 460*0.05=23K rows
-        Dolly("train", seed),  # 10*0.1=1K rows
-        MMLU("auxiliary_train", "train", seed),  # 100*0.05=5K rows,
-        GSM8K("main", "train", seed), # 8K rows teaching simple math and (calculator) tool use
-        GSM8K("main", "train", seed), # 2 epochs of GSM8K
-        JSONDataset("rollouts/rollouts.jsonl"),  # 2000 rows
-        JSONDataset("rollouts/rollouts.jsonl"),  # let's add three epochs of these
-        JSONDataset("rollouts/rollouts.jsonl"),
+        ### general chat templating and instruction following
+        Dataset("QuixiAI/SystemChat-2.0", "messages", "train[:20%]", seed), # teaches the model to follow system prompts
+        Dataset("HuggingFaceTB/everyday-conversations-llama3.1-2k", "messages", "train_sft", seed), # 2 epochs of regular conversations
+        Dataset("HuggingFaceTB/everyday-conversations-llama3.1-2k", "messages", "train_sft", seed),
+        Dataset("HuggingFaceH4/no_robots", "messages", "train", seed), # 2 epochs of instruction following
+        Dataset("HuggingFaceH4/no_robots", "messages", "train", seed), 
+        JSONDataset("rollouts/all_train.jsonl"),  # 2 epochs of simple-ish tool calling rollouts (~100k)
+        JSONDataset("rollouts/all_train.jsonl"),  # 2 epochs of simple-ish tool calling rollouts (~100k)
+        JSONDataset("rollouts/rollouts_train.jsonl"),  # 5 epochs of long-context rollouts at 2K each
+        JSONDataset("rollouts/rollouts_train.jsonl"),
+        JSONDataset("rollouts/rollouts_train.jsonl"),
+        JSONDataset("rollouts/rollouts_train.jsonl"),
+        JSONDataset("rollouts/rollouts_train.jsonl"),
     ],
-    seed,
+    seed
 )
 
 val_ds = TaskMixture([
-    SmolTalk("test", seed),
     MMLU("all", "test", seed),
-    GSM8K(subset="main", split="test", seed=seed)
+    GSM8K(subset="main", split="test", seed=seed),
+    JSONDataset("rollouts/all_test.jsonl"),
+    JSONDataset("rollouts/rollouts_test.jsonl"),
+    Dataset("HuggingFaceH4/no_robots", "messages", "test", seed),
+    Dataset("HuggingFaceTB/everyday-conversations-llama3.1-2k", "messages", "test_sft", seed),
 ], seed)
 
 
@@ -220,7 +231,8 @@ if num_steps < 0:
 
 
 def get_lr_multiplier(step):
-    # linear lr decay - flat for first 80% then ramp down
+    # linear lr decay - flat for first 98% then ramp down
+    return 1
     progress = step / num_steps
     return 1 if progress < 0.8 else 1 - (progress - 0.8) / 0.2
 
@@ -282,12 +294,11 @@ def train_step(idx, targets, model, state, lr_multiplier):
     return model, state, loss, total_tokens
 
 
-# this time we tokenizer prompts using our chat template
+# this time we tokenize prompts using our chat template
 prompts = [
-    "What is the capital of France?",
-    "What is the chemical symbol of gold?",
-    "What is the closest planet to the Sun?",
-    "What is the opposite of hot?",
+    "Can you fix the bug in hello.py?",
+    "Can you implement a MLP layer for me?",
+    "Where is the utils.py file located?",
 ]
 user_start, user_end = tokenizer.encode_special("<|user_start|>"), tokenizer.encode_special("<|user_end|>")
 assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>"), tokenizer.encode_special("<|assistant_end|>")
@@ -315,7 +326,7 @@ for step in range(num_steps):
     eta = ((num_steps - step) * dt) / 60
     total_training_time += dt
 
-    print0(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f} | min ETA {eta:.1f} | lr_multiplier: {lr_multiplier:.3f}")
+    print0(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f} | min ETA {eta:.1f}m | lr_multiplier: {lr_multiplier:.3f}")
 
     if (step % profile_every == 0) or last_step:
         memory_stats = jax.local_devices()[0].memory_stats() or {}
@@ -327,7 +338,7 @@ for step in range(num_steps):
             new_tokens = generate(
               idx,
               model,
-              max_tokens=16,
+              max_tokens=64,
               temperature=None,
               compute_dtype=compute_dtype,
               pad_token_id=assistant_end,

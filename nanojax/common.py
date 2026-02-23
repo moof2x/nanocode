@@ -34,6 +34,8 @@ def setup_logging(log_path):
         def __getattr__(self, name):
             return getattr(self.files[0], name)
 
+    from pathlib import Path
+    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
     f = open(log_path, 'w')
     sys.stdout = DiskLogger(sys.stdout, f)
     sys.stderr = DiskLogger(sys.stderr, f)

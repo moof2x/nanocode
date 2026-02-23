@@ -1,5 +1,5 @@
 """
-Mostly copied from nanochat/scripts/base_eval.py
+Adapted from nanochat/scripts/base_eval.py
 """
 import os
 import csv

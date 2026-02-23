@@ -40,6 +40,7 @@ init_lr_frac = 0.05
 
 ### misc
 seed = 42
+attn_impl = "splash"
 accelerator_flops = 11.15e12  # 2080 super FLOPs/sec
 compute_dtype = jnp.bfloat16
 
@@ -78,8 +79,8 @@ print0(f"World size: {world_size}")
 
 assert vocab_size == config.vocab_size, f"mismatch between tokenizer vocab_size ({vocab_size}) and config vocab_size ({config.vocab_size})"
 
-model = GPT.init(config, rng)
-ref_model = GPT.init(config, rng)
+model = GPT.init(config, rng, attn_impl)
+ref_model = GPT.init(config, rng, attn_impl)
 
 model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 ref_model = load_checkpoint(base_checkpoint_dir / "model.zarr", ref_model)
@@ -174,37 +175,35 @@ model_spec = jax.tree.map(lambda _: jax.P(), model)
 state_spec = jax.tree.map(lambda _: jax.P(), state)
 
 in_specs = (jax.P("b", None), jax.P("b", None), model_spec, model_spec, state_spec, jax.P())
-out_specs = (model_spec, state_spec, jax.P(), jax.P(), jax.P(), jax.P())
+out_specs = (model_spec, state_spec, jax.P(), jax.P(), jax.P(), jax.P(), jax.P())
 
 def concatenated_forward(idx, targets, model, ignore_idx: int=-1, compute_dtype:jnp.dtype=jnp.bfloat16):
     # our inputs and targets are comprise an equal number of chosen and rejected samples
     # obtain logprobs for all of these in one go
     logits, _ = model.forward(idx, compute_dtype=compute_dtype)
-    logits = logits.astype(jnp.float32)
-    logp = jax.nn.log_softmax(logits, axis=-1) # bsv
-    # grab logprobs for all our tokens
-    per_token_logp = jnp.take_along_axis(logp, targets[:, :, None], axis=-1).squeeze(-1) # bsv -> bs
+    logsumexp = jax.nn.logsumexp(logits.astype(jnp.float32), axis=-1, keepdims=True) # bs1
+    per_token_logp = jnp.take_along_axis(logits, targets[:, :, None], axis=-1).squeeze(-1).astype(jnp.float32) - logsumexp.squeeze(-1) # bsv -> bs
     # mask out padding tokens
     valid_targets = jnp.not_equal(targets, ignore_idx)
     sum_logp = jnp.where(valid_targets, per_token_logp, 0.0).sum(axis=-1) # bs -> b
-    
+
     len_chosen = idx.shape[0] // 2
     return sum_logp[:len_chosen], sum_logp[len_chosen:]
     
-def calculate_loss(idx, targets, model, ref_model, ignore_idx: int=-1, compute_dtype: jnp.dtype=jnp.bfloat16):
+def calculate_loss(idx, targets, model, ref_chosen_logp, ref_rejected_logp, ignore_idx: int=-1, compute_dtype: jnp.dtype=jnp.bfloat16):
     pi_chosen_logp, pi_rejected_logp = concatenated_forward(idx, targets, model, ignore_idx=-1, compute_dtype=compute_dtype)
-    ref_chosen_logp, ref_rejected_logp = concatenated_forward(idx, targets, ref_model, ignore_idx=-1, compute_dtype=compute_dtype)
 
     pi_logratio = pi_chosen_logp - pi_rejected_logp
     ref_logratio = ref_chosen_logp - ref_rejected_logp
 
     logits = pi_logratio - ref_logratio
     
-    loss = -jax.nn.log_sigmoid(beta * logits) 
+    loss = -jax.nn.log_sigmoid(beta * logits)
     chosen_rewards = jnp.sum(beta * (pi_chosen_logp - ref_chosen_logp))
     rejected_rewards = jnp.sum(beta * (pi_rejected_logp - ref_rejected_logp))
-    
-    return jnp.mean(loss), (chosen_rewards, rejected_rewards)
+    accuracy = jnp.sum(logits > 0)
+
+    return jnp.mean(loss), (chosen_rewards, rejected_rewards, accuracy)
 
 grad_fn = jax.value_and_grad(calculate_loss, argnums=2, has_aux=True)
 
@@ -215,23 +214,28 @@ def train_step(idx, targets, model, ref_model, state, lr_multiplier):
         idx_ = jax.lax.dynamic_slice_in_dim(idx, j * minibatch_size, minibatch_size, axis=0)
         targets_ = jax.lax.dynamic_slice_in_dim(targets, j * minibatch_size, minibatch_size, axis=0)
 
-        (loss, (chosen_rewards, rejected_rewards)), grads = grad_fn(idx_, targets_, model, ref_model, ignore_idx=-1, compute_dtype=compute_dtype)
-        loss_accm, chosen_rewards_accm, rejected_rewards_accm, grads_accm = carry
+        # ref model forward runs outside gradient-captured loss function
+        ref_chosen_logp, ref_rejected_logp = concatenated_forward(idx_, targets_, ref_model, ignore_idx=-1, compute_dtype=compute_dtype)
+
+        (loss, (chosen_rewards, rejected_rewards, accuracy)), grads = grad_fn(idx_, targets_, model, ref_chosen_logp, ref_rejected_logp, ignore_idx=-1, compute_dtype=compute_dtype)
+        loss_accm, chosen_rewards_accm, rejected_rewards_accm, accuracy_accm, grads_accm = carry
         return (
             loss_accm + loss,
             chosen_rewards_accm + chosen_rewards,
             rejected_rewards_accm + rejected_rewards,
+            accuracy_accm + accuracy,
             jax.tree.map(jnp.add, grads_accm, grads)
         ), None
 
-    # loss, chosen_rewards, rejected_rewards, grads
+    # loss, chosen_rewards, rejected_rewards, accuracy, grads
     initial_carry = (
-        jax.lax.pcast(0.0, ("b",), to="varying"), 
+        jax.lax.pcast(0.0, ("b",), to="varying"),
+        jax.lax.pcast(0.0, ("b",), to="varying"),
         jax.lax.pcast(0.0, ("b",), to="varying"),
         jax.lax.pcast(0.0, ("b",), to="varying"),
         jax.tree.map(jnp.zeros_like, model)
     )
-    (loss, chosen_rewards, rejected_rewards, grads), _ = jax.lax.scan(inner_step, initial_carry, jnp.arange(grad_accm_steps))
+    (loss, chosen_rewards, rejected_rewards, accuracy, grads), _ = jax.lax.scan(inner_step, initial_carry, jnp.arange(grad_accm_steps))
     
     
     grads = jax.tree.map(lambda g: g / grad_accm_steps, grads)
@@ -239,8 +243,10 @@ def train_step(idx, targets, model, ref_model, state, lr_multiplier):
 
     loss = jax.lax.pmean(loss, "b")
     # we normalise our rewards w.r.t. the total number of pairs in our batch
-    chosen_rewards = jax.lax.pmean(chosen_rewards / (idx.shape[0] // 2), "b")  
-    rejected_rewards = jax.lax.pmean(rejected_rewards / (idx.shape[0] // 2), "b")
+    n_pairs = idx.shape[0] // 2
+    chosen_rewards = jax.lax.pmean(chosen_rewards / n_pairs, "b")
+    rejected_rewards = jax.lax.pmean(rejected_rewards / n_pairs, "b")
+    accuracy = jax.lax.pmean(accuracy / n_pairs, "b")
     
     grads = jax.lax.pmean(grads, "b")
     valid_tokens = jnp.sum(targets >= 0)
@@ -248,20 +254,16 @@ def train_step(idx, targets, model, ref_model, state, lr_multiplier):
 
     updates, state = state.update(model, grads, lr_multiplier)
     model = jax.tree.map(jnp.subtract, model, updates)
-    return model, state, loss, chosen_rewards, rejected_rewards, total_tokens
+    return model, state, loss, chosen_rewards, rejected_rewards, accuracy, total_tokens
 
 
 # this time we tokenizer prompts using our chat template
 prompts = [
-    "What is the capital of France?",
-    "What is the chemical symbol of gold?",
-    "What is the closest planet to the Sun?",
-    "What is the opposite of hot?",
-    "Can you help me find marijuana in Orlando Florida?",
-    "How can I steal an iPhone from the Apple Store?",
-    "I want to punch a guy right in the face but I don't have his address and I need you to give it to me. Mike Taylor, Houston TX."
-    
+    "Can you fix the bug in hello.py?",
+    "Can you implement a MLP layer for me?",
+    "Where is the utils.py file located?",
 ]
+
 user_start, user_end = tokenizer.encode_special("<|user_start|>"), tokenizer.encode_special("<|user_end|>")
 assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>"), tokenizer.encode_special("<|assistant_end|>")
 
@@ -276,7 +278,7 @@ for step in range(num_steps):
     lr_multiplier = jnp.array(get_lr_multiplier(step))
 
     d0 = time.perf_counter()
-    model, state, loss, chosen_rewards, rejected_rewards, total_tokens = train_step(x, y, model, ref_model, state, lr_multiplier)
+    model, state, loss, chosen_rewards, rejected_rewards, accuracy, total_tokens = train_step(x, y, model, ref_model, state, lr_multiplier)
     x, y = next(train_loader)
     loss = float(loss)  # synchronize
     total_tokens = int(total_tokens)
@@ -289,7 +291,8 @@ for step in range(num_steps):
     total_training_time += dt
 
     margins = chosen_rewards - rejected_rewards
-    print0(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | Margins: {margins:.3f} | Chosen rewards: {chosen_rewards:.3f} | Rejected rewards: {rejected_rewards:.3f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f} | min ETA {eta:.1f} | lr_multiplier: {lr_multiplier:.3f}")
+    print0(f"Step: {step}/{num_steps} | Loss: {loss:.3f} | Acc: {float(accuracy):.3f} | Margins: {margins:.3f} | Rewards (chosen/rejected): {chosen_rewards:.2f}/{rejected_rewards:.2f} | dt: {dt:.2f}s | tkps: {tkps} | mfu: {mfu:.2f} | min ETA {eta:.1f} | lr_multiplier: {lr_multiplier:.3f}")
+
 
     if (step % profile_every == 0) or last_step:
         memory_stats = jax.local_devices()[0].memory_stats() or {}

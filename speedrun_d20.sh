@@ -10,6 +10,9 @@ export OMP_NUM_THREADS=1
 export NANOJAX_BASE_DIR="$HOME/.cache/nanojax_d20"
 mkdir -p $NANOJAX_BASE_DIR
 rm -f /tmp/libtpu_lockfile
+
+export LIBTPU_INIT_ARGS="--xla_tpu_use_bundle_aware_cost_model_for_fusions=false --xla_tpu_scoped_vmem_limit_kib=65536"
+
 # train tokenizer on ~2B characters
 
 python -m nanojax.dataset -n 248
@@ -19,22 +22,23 @@ if [ ! -d "$NANOJAX_BASE_DIR/tokenizer" ]; then
     python -m scripts.tok_eval
 fi
 python -u -m scripts.base_train \
-    --batch_size=32 \
+    --batch_size=64 \
     --minibatch_size=2 \
     --config=configs.d20 \
     --accelerator_flops=918e12 \
     --eval_every=500 \
     --sample_every=500
 
-python -u -m scripts.mid_train \
-    --batch_size=32 \
-    --minibatch_size=2 \
-    --accelerator_flops=918e12 \
-    --eval_every=500 \
-    --sample_every=500
+# python -u -m scripts.mid_train \
+#     --batch_size=32 \
+#     --minibatch_size=2 \
+#     --accelerator_flops=918e12 \
+#     --eval_every=500 \
+#     --sample_every=500
+python -u -m scripts.base_eval --checkpoint=base --minibatch-size=8
 
 python -u -m scripts.chat_sft \
-    --batch_size=32 \
+    --batch_size=64 \
     --minibatch_size=2 \
     --accelerator_flops=918e12 \
     --eval_every=500 \

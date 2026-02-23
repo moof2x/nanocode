@@ -39,6 +39,7 @@ lr = 0.02
 
 ### misc
 seed = 42
+param_data_ratio = 8
 accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
 compute_dtype = jnp.bfloat16
 attn_impl = "splash"
@@ -95,7 +96,7 @@ for name, layer in [("wte", model.wte), ("h", model.h),("lm_head", model.lm_head
 
 
 if num_steps < 0:
-    total_tokens = num_params * 8
+    total_tokens = num_params * param_data_ratio
     num_steps = math.ceil(total_tokens / max_seq_len / (batch_size * world_size)) + 1
 else:
     total_tokens = num_steps * max_seq_len * (batch_size * world_size)
