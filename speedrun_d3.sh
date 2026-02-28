@@ -1,64 +1,51 @@
 #!/bin/bash
-# bash speedrun.sh
-
-# NOTE: Training LLMs requires GPU compute and $$$. You will not get far on your Macbook.
-# Think of this run as educational/fun demo, not something you should expect to work well.
-# This is also why I hide this script away in dev/
+# bash speedrun_d3.sh
+START_TIME=$SECONDS
 
 # all the setup stuff
 export OMP_NUM_THREADS=1
-export NANOJAX_BASE_DIR="$HOME/.cache/nanojax_d3"
-mkdir -p $NANOJAX_BASE_DIR
+export NANOJAX_BASE_DIR="$HOME/.cache/nanojax"
+export MODEL_TAG=d3
+rm -f /tmp/libtpu_lockfile
+
+export LIBTPU_INIT_ARGS="--xla_tpu_use_bundle_aware_cost_model_for_fusions=false --xla_tpu_scoped_vmem_limit_kib=65536"
 
 # train tokenizer on ~1B characters
-python -m nanojax.dataset -n 4
-if [ ! -d "$NANOJAX_BASE_DIR/tokenizer" ]; then
+python -m nanojax.dataset -d fineweb-edu -n 1
+python -m nanojax.dataset -d the-stack-v2-dedup -n 1
+
+if [ ! -d "$NANOJAX_BASE_DIR/$MODEL_TAG/tokenizer" ]; then
     python -m scripts.tok_train --max_chars=1000000000 --vocab_size=8000
     python -m scripts.tok_eval
 fi
-exit 1
-# train a very small 4 layer model on the CPU
-# each optimization step processes a single sequence of 1024 tokens
-# we only run 50 steps of optimization (bump this to get better results)
-python -m scripts.base_train \
-    --depth=8 \
-    --max_seq_len=1024 \
-    --device_batch_size=2 \
-    --total_batch_size=2048 \
-    --eval_every=1000 \
-    --eval_tokens=4096 \
-    --core_metric_every=1000 \
-    --core_metric_max_per_task=12 \
-    --sample_every=1000 \
-    --num_iterations=1000
-python -m scripts.base_loss --device_batch_size=32 --split_tokens=4096
-python -m scripts.base_eval --max-per-task=16
 
-# midtraining
-python -m scripts.mid_train \
-    --max_seq_len=1024 \
-    --device_batch_size=16 \
-    --eval_every=1000 \
-    --eval_tokens=4096 \
-    --total_batch_size=16394 \
-    --num_iterations=1000
-# eval results will be terrible, this is just to execute the code paths.
-# note that we lower the execution memory limit to 1MB to avoid warnings on smaller systems
-python -m scripts.chat_eval --source=mid --max-new-tokens=128 --max-problems=20
+python -u -m scripts.base_train \
+    --batch_size=512 \
+    --minibatch_size=512 \
+    --config=configs.d3 \
+    --accelerator_flops=918e12 \
+    --eval_every=500 \
+    --sample_every=500
+python -u -m scripts.base_eval --checkpoint=base --minibatch-size=8
 
-# SFT
-python -m scripts.chat_sft \
-    --device_batch_size=4 \
-    --target_examples_per_step=32 \
-    --num_iterations=-1 \
-    --eval_steps=100 \
-    --num_epochs=1 \
-    --eval_metrics_max_problems=16
+python -u -m scripts.chat_sft \
+    --batch_size=512 \
+    --minibatch_size=512 \
+    --accelerator_flops=918e12 \
+    --eval_every=250 \
+    --sample_every=250
 
-# Chat CLI
-# python -m scripts.chat_cli -p "Why is the sky blue?"
+python -u -m scripts.dpo \
+    --batch_size=512 \
+    --minibatch_size=512 \
+    --accelerator_flops=918e12 \
+    --eval_every=100 \
+    --sample_every=100
 
-# Chat Web
-# python -m scripts.chat_web
+python -m scripts.report && uvx pandoc reports/d3/report.md -o reports/d3/report.html
 
-python -m nanochat.report generate
+ELAPSED=$(( SECONDS - START_TIME ))
+echo "speedrun_d3 total time: $(( ELAPSED / 3600 ))h $(( (ELAPSED % 3600) / 60 ))m $(( ELAPSED % 60 ))s"
+echo "to view your report, copy reports/d3/ to your local machine, e.g. using scp"
+echo "to chat with your model:"
+echo "  NANOJAX_BASE_DIR=$NANOJAX_BASE_DIR MODEL_TAG=$MODEL_TAG python -m scripts.nanocode --max_tokens=1024"
