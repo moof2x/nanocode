@@ -11,8 +11,8 @@ rm -f /tmp/libtpu_lockfile
 export LIBTPU_INIT_ARGS="--xla_tpu_use_bundle_aware_cost_model_for_fusions=false --xla_tpu_scoped_vmem_limit_kib=65536"
 
 # train tokenizer on ~2B characters
-python -m nanojax.dataset -d fineweb-edu -n 130
-python -m nanojax.dataset -d the-stack-v2-dedup -n 30
+python -m data.pretrain -d fineweb-edu -n 130
+python -m data.pretrain -d the-stack-v2-dedup -n 30
 
 if [ ! -d "$NANOJAX_BASE_DIR/$MODEL_TAG/tokenizer" ]; then
     python -m scripts.tok_train --max_chars=2000000000 --vocab_size=32768
