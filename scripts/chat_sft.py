@@ -9,21 +9,17 @@ import jax.numpy as jnp
 import numpy as np
 
 from nanojax.checkpointing import load_checkpoint, load_model_config, save_checkpoint
-from nanojax.common import get_base_dir, init_distributed, print0, setup_logging
+from nanojax.common import get_base_dir, get_model_dir, init_distributed, print0, setup_logging
 from nanojax.eval import evaluate_bpb
 from nanojax.generation import generate
 from nanojax.gpt import GPT, calculate_loss, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
-from scripts.chat_eval import run_chat_eval
-from tasks.dolly import Dolly
-from tasks.sequence import TaskSequence
-from tasks.mixture import TaskMixture
-from tasks.mmlu import MMLU
-from tasks.smoltalk import SmolTalk
-from tasks.json_dataset import JSONDataset
-from tasks.gsm8k import GSM8K
-from tasks.dataset import Dataset
+from data.sequence import TaskSequence
+from data.mixture import TaskMixture
+from data.json_dataset import JSONDataset
+from data.common import SYSTEM_PROMPT
+from data.dataset import Dataset
 
 # distributed setup
 world_size, mesh = init_distributed()
@@ -42,7 +38,7 @@ wd = 0.0
 wte_lr = 0.3
 lm_head_lr = 0.004
 lr = 0.02
-init_lr_frac = 1
+init_lr_frac = 0.05
 
 ### misc
 seed = 42
@@ -58,7 +54,8 @@ profile_every = 500
 config_keys = [k for k,v in globals().items() if not k.startswith("_") and isinstance(v, (int, float, bool, str))] + ["compute_dtype"]
 exec(open(os.path.join("nanojax", "configurator.py")).read()) # overrides from command line
 base_dir = get_base_dir()
-setup_logging(base_dir / "chat_sft_log.txt")
+model_dir = get_model_dir()
+setup_logging(model_dir / "chat_sft_log.txt")
 user_config = {k: globals()[k] for k in config_keys}
 for k, v in user_config.items():
     print0(f"  {k}: {v}")
@@ -69,13 +66,13 @@ assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by
 tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
 vocab_size = tokenizer.get_vocab_size()
-base_checkpoint_dir = base_dir / f"{checkpoint}_checkpoints"
-checkpoint_dir = base_dir / "sft_checkpoints"
+base_checkpoint_dir = model_dir / f"{checkpoint}_checkpoints"
+checkpoint_dir = model_dir / "sft_checkpoints"
 config = load_model_config(base_checkpoint_dir / "model.zarr")
 rng = jax.random.key(seed)
 
 command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
-print0(f"NANOJAX_BASE_DIR={base_dir} {command}")
+print0(f"NANOJAX_BASE_DIR={base_dir} MODEL_TAG={os.environ.get('MODEL_TAG', '')} {command}")
 
 max_seq_len = config.sequence_len
 eval_tokens = batch_size * max_seq_len * 20  # magic number from nanochat
@@ -91,7 +88,7 @@ for name, layer in [("wte", model.wte), ("h", model.h),("lm_head", model.lm_head
     num_params = jax.tree.reduce(operator.add, jax.tree.map(jnp.size, layer))
     print0(f"  {num_params/1e6}M {name} parameters")
 
-num_flops_per_token = estimate_flops(model)
+num_flops_per_token = estimate_flops(model) * 4/3 # accounts for the additional forward pass we perform with the ref model
 print0(f"Estimated FLOPs per token: {num_flops_per_token}")
 
 state = Muon.init(
@@ -109,13 +106,9 @@ model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 # our curriculum will begin with general chat/instruction following and graduate to code+agentic tasks
 train_ds = TaskMixture(
     [
-        ### general chat templating and instruction following
-        Dataset("QuixiAI/SystemChat-2.0", "messages", "train[:20%]", seed), # teaches the model to follow system prompts
-        Dataset("HuggingFaceTB/everyday-conversations-llama3.1-2k", "messages", "train_sft", seed), # 2 epochs of regular conversations
-        Dataset("HuggingFaceTB/everyday-conversations-llama3.1-2k", "messages", "train_sft", seed),
-        Dataset("HuggingFaceH4/no_robots", "messages", "train", seed), # 2 epochs of instruction following
-        Dataset("HuggingFaceH4/no_robots", "messages", "train", seed), 
-        JSONDataset("rollouts/all_train.jsonl"),  # 2 epochs of simple-ish tool calling rollouts (~100k)
+        # general chat templating and instruction following
+        Dataset("HuggingFaceTB/smol-smoltalk", "messages", "train[:40%]", seed),
+        ### agentic rollout data: 1 epoch of ~100k rows of single-turn interactions, 5 epochs of ~2k rows of long-form agentic interactions
         JSONDataset("rollouts/all_train.jsonl"),  # 2 epochs of simple-ish tool calling rollouts (~100k)
         JSONDataset("rollouts/rollouts_train.jsonl"),  # 5 epochs of long-context rollouts at 2K each
         JSONDataset("rollouts/rollouts_train.jsonl"),
@@ -126,11 +119,12 @@ train_ds = TaskMixture(
     seed
 )
 
-val_ds = TaskMixture([
-    MMLU("all", "test", seed),
-    GSM8K(subset="main", split="test", seed=seed),
+val_ds_rollout = TaskMixture([
     JSONDataset("rollouts/all_test.jsonl"),
     JSONDataset("rollouts/rollouts_test.jsonl"),
+], seed)
+
+val_ds_chat = TaskMixture([
     Dataset("HuggingFaceH4/no_robots", "messages", "test", seed),
     Dataset("HuggingFaceTB/everyday-conversations-llama3.1-2k", "messages", "test_sft", seed),
 ], seed)
@@ -150,12 +144,7 @@ def dataloader(dataset, B, T, tokenizer, buffer_size=100):
             if cursor >= len(dataset):
                 cursor = jax.process_index()
             conversation = dataset[cursor]
-            try:
-                ids, mask = tokenizer.render_conversation(conversation, max_tokens=T + 1)
-            except:
-                import ipdb
-                ipdb.set_trace()
-                x = 10
+            ids, mask = tokenizer.render_conversation(conversation, max_tokens=T + 1)
             conv_buffer.append((ids, mask))
             cursor += jax.process_count()
 
@@ -165,6 +154,7 @@ def dataloader(dataset, B, T, tokenizer, buffer_size=100):
         targets = np.full((B, T), -1, dtype=np.int32)
 
         for i, (ids, mask) in enumerate(batch):
+            ids, mask = np.array(ids), np.array(mask)
             n = len(ids)
             inputs[i, :n-1] = ids[:-1]
             row_targets = ids[1:n]
@@ -223,7 +213,8 @@ def dist_dataloader(dataset, batch_size, seq_len, tokenizer, mesh):
 
 
 train_loader = dist_dataloader(train_ds, batch_size, max_seq_len, tokenizer, mesh)
-get_val_dataloader = lambda: dist_dataloader(val_ds, minibatch_size, max_seq_len, tokenizer, mesh)
+get_val_rollout_loader = lambda: dist_dataloader(val_ds_rollout, minibatch_size, max_seq_len, tokenizer, mesh)
+get_val_chat_loader = lambda: dist_dataloader(val_ds_chat, minibatch_size, max_seq_len, tokenizer, mesh)
 
 steps_per_epoch = len(train_ds) // (batch_size * world_size)
 if num_steps < 0:
@@ -231,13 +222,13 @@ if num_steps < 0:
 
 
 def get_lr_multiplier(step):
-    # linear lr decay - flat for first 98% then ramp down
-    return 1
+    # linear lr decay - flat for first 90% then ramp down
     progress = step / num_steps
-    return 1 if progress < 0.8 else 1 - (progress - 0.8) / 0.2
+    return 1 if progress < 0.7 else 1 - (progress - 0.7) / 0.7
 
 
-# we construct a PartitionSpec with default behaviour indicating to replicate for our model and optimizer states
+# a PartitionSpec is used to describe the sharding behaviour of inputs and outputs with shard_map
+# P() indicates to replicate (DDP)
 model_spec = jax.tree.map(lambda _: jax.P(), model)
 state_spec = jax.tree.map(lambda _: jax.P(), state)
 
@@ -303,7 +294,7 @@ prompts = [
 user_start, user_end = tokenizer.encode_special("<|user_start|>"), tokenizer.encode_special("<|user_end|>")
 assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>"), tokenizer.encode_special("<|assistant_end|>")
 
-prompts = [{"messages": [{"role": "user", "content": p}]} for p in prompts]
+prompts = [{"messages": [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": p}]} for p in prompts]
 prompt_idx = [tokenizer.render_conversation(p)[0] for p in prompts]
 prompt_idx = [p + [assistant_start] for p in prompt_idx]
 
@@ -350,8 +341,10 @@ for step in range(num_steps):
     if (step % eval_every == 0) or last_step:
         d0 = time.perf_counter()
         eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size)
-        val_bpb = evaluate_bpb(model, get_val_dataloader(), eval_steps, token_bytes, compute_dtype, mesh)
-        print0(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
+        rollout_bpb = evaluate_bpb(model, get_val_rollout_loader(), eval_steps, token_bytes, compute_dtype, mesh)
+        chat_bpb = evaluate_bpb(model, get_val_chat_loader(), eval_steps, token_bytes, compute_dtype, mesh)
+        avg_bpb = (float(rollout_bpb) + float(chat_bpb)) / 2
+        print0(f"\trollout_bpb: {float(rollout_bpb):.4f} | chat_bpb: {float(chat_bpb):.4f} | avg_bpb: {avg_bpb:.4f} | dt: {(time.perf_counter() - d0):.2f}s")
 
 print0(f"Total training time: {(total_training_time / 60):.2f}min")
 save_checkpoint(checkpoint_dir / "model.zarr", model)

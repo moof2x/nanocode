@@ -9,7 +9,7 @@ import jax.numpy as jnp
 
 from nanojax import configs
 from nanojax.checkpointing import save_checkpoint
-from nanojax.common import get_base_dir, init_distributed, print0, setup_logging
+from nanojax.common import get_base_dir, get_model_dir, init_distributed, print0, setup_logging
 from nanojax.dataloader import get_distributed_dataloader
 from nanojax.eval import evaluate_bpb
 from nanojax.generation import generate
@@ -38,6 +38,7 @@ lm_head_lr = 0.004
 lr = 0.02
 
 ### misc
+code_ratio = 0.2
 seed = 42
 param_data_ratio = 8
 accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
@@ -54,7 +55,8 @@ profile_every = 500
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))] + ["config", "compute_dtype"]
 exec(open(os.path.join('nanojax', 'configurator.py')).read()) # overrides from command line
 base_dir = get_base_dir()
-setup_logging(base_dir / "base_log.txt")
+model_dir = get_model_dir()
+setup_logging(model_dir / "base_log.txt")
 user_config = {k: globals()[k] for k in config_keys}
 for k, v in user_config.items():
     print0(f"  {k}: {v}")
@@ -62,12 +64,12 @@ for k, v in user_config.items():
 grad_accm_steps = batch_size // minibatch_size
 assert batch_size % grad_accm_steps == 0, "batch_size must be evenly divisble by grad_accm_steps."
 max_seq_len = config.sequence_len
-eval_tokens = batch_size * max_seq_len * 20
-checkpoint_dir = base_dir / "base_checkpoints"
+eval_tokens = batch_size * max_seq_len * 40 * world_size
+checkpoint_dir = model_dir / "base_checkpoints"
 rng = jax.random.key(seed)
 
 command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
-print0(f"NANOJAX_BASE_DIR={base_dir} {command}")
+print0(f"NANOJAX_BASE_DIR={base_dir} MODEL_TAG={os.environ.get('MODEL_TAG', '')} {command}")
 
 tokenizer = get_tokenizer()
 token_bytes = get_token_bytes()
@@ -79,8 +81,9 @@ print0(f"Vocab size: {vocab_size}")
 accelerator_flops *= world_size
 print(f"World size: {world_size}")
 
-train_loader = get_distributed_dataloader(batch_size, max_seq_len, "train", tokenizer, mesh)
-get_val_dataloader = lambda: get_distributed_dataloader(minibatch_size, max_seq_len, "val", tokenizer, mesh)
+train_loader = get_distributed_dataloader(batch_size, max_seq_len, "train", tokenizer, code_ratio, mesh)
+get_fwe_val_dataloader = lambda: get_distributed_dataloader(minibatch_size, max_seq_len, "val", tokenizer, 0.0, mesh)
+get_sv2_val_dataloader = lambda: get_distributed_dataloader(minibatch_size, max_seq_len, "val", tokenizer, 1.0, mesh)
 
 model = GPT.init(
     config,
@@ -206,8 +209,9 @@ while True:
         if (step % eval_every == 0) or last_step:
             d0 = time.perf_counter()
             eval_steps = eval_tokens // (minibatch_size * max_seq_len * world_size)
-            val_bpb = evaluate_bpb(model, get_val_dataloader(), eval_steps, token_bytes, compute_dtype, mesh)
-            print0(f"\tbpb: {float(val_bpb):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
+            fwe_bpb = evaluate_bpb(model, get_fwe_val_dataloader(), eval_steps, token_bytes, compute_dtype, mesh)
+            sv2_bpb = evaluate_bpb(model, get_sv2_val_dataloader(), eval_steps, token_bytes, compute_dtype, mesh)
+            print0(f"\tfwe_bpb: {float(fwe_bpb):.4f} | sv2_bpb: {float(sv2_bpb):.4f} | avg_bpb: {float((fwe_bpb + sv2_bpb) / 2):.4f} | dt: {(time.perf_counter() - d0):.2f}s")
 
         # only run CORE on rank 0 in multi-node
         if ((step % core_metric_every == 0) or last_step) and jax.process_index() == 0:

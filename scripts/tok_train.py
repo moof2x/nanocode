@@ -7,13 +7,14 @@ This script is identical to karparthy/nanochat/scripts/tok_train.py
 but uses Zarr instead of torch to serialize token_bytes.py
 """
 import argparse
+import random
 import time
 
 import numpy as np
 import zarr
 
-from nanojax.common import get_base_dir, init_distributed, print0, setup_logging
-from nanojax.dataset import parquets_iter_batched
+from nanojax.common import get_model_dir, init_distributed, print0, setup_logging
+from data.pretrain import parquets_iter_batched
 from nanojax.tokenizer import RustBPETokenizer
 
 init_distributed()
@@ -24,6 +25,7 @@ parser = argparse.ArgumentParser(description='Train a BPE tokenizer')
 parser.add_argument('--max_chars', type=int, default=10_000_000_000, help='Maximum characters to train on (default: 10B)') 
 parser.add_argument('--doc_cap', type=int, default=10_000, help='Maximum characters per document (default: 10,000)')
 parser.add_argument('--vocab_size', type=int, default=32768, help='Vocabulary size (default: 32768, GPT2-small)')
+parser.add_argument('--code_ratio', type=float, default=0.2, help='Fraction of code data (default: 0.2)')
 args = parser.parse_args()
 print0(f"max_chars: {args.max_chars:,}")
 print0(f"doc_cap: {args.doc_cap:,}")
@@ -38,12 +40,17 @@ def text_iterator():
     2) Crop every document to args.doc_cap characters
     3) Break when we've seen args.max_chars characters
     """
+    fineweb = parquets_iter_batched("fineweb-edu", split="train")
+    stack_v2 = parquets_iter_batched("the-stack-v2-dedup", split="train")
+    batch_iter = lambda: stack_v2 if random.random() < args.code_ratio else fineweb
     nchars = 0
-    for batch in parquets_iter_batched(split="train"):
+    while nchars <= args.max_chars:
+        try:
+            batch = next(batch_iter())
+        except StopIteration:
+            break
         for doc in batch:
-            doc_text = doc
-            if len(doc_text) > args.doc_cap:
-                doc_text = doc_text[:args.doc_cap]
+            doc_text = doc[:args.doc_cap]
             nchars += len(doc_text)
             yield doc_text
             if nchars > args.max_chars:
@@ -51,10 +58,10 @@ def text_iterator():
 text_iter = text_iterator()
 
 # -----------------------------------------------------------------------------
-base_dir = get_base_dir()
-tokenizer_dir = base_dir / "tokenizer"
+model_dir = get_model_dir()
+tokenizer_dir = model_dir / "tokenizer"
 tokenizer_dir.mkdir(parents=True, exist_ok=True)
-setup_logging(base_dir /  "tok_train.txt")
+setup_logging(model_dir / "tok_train.txt")
 # Train the tokenizer
 t0 = time.time()
 tokenizer = RustBPETokenizer.train_from_iterator(text_iter, args.vocab_size)

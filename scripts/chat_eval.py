@@ -4,7 +4,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from nanojax.common import print0, init_distributed, get_base_dir, setup_logging
+from nanojax.common import print0, init_distributed, get_model_dir, setup_logging
 from nanojax.checkpointing import load_checkpoint, load_model_config
 from nanojax.gpt import GPT
 from nanojax.tokenizer import get_tokenizer
@@ -175,10 +175,10 @@ if __name__ == "__main__":
     if jax.process_index() == 0:
         compute_dtype = jnp.bfloat16 if args.compute_dtype == 'bfloat16' else jnp.float32
 
-        base_dir = get_base_dir()
-        checkpoint_dir = base_dir / f"{args.checkpoint}_checkpoints"
+        model_dir = get_model_dir()
+        checkpoint_dir = model_dir / f"{args.checkpoint}_checkpoints"
         model_cfg = load_model_config(checkpoint_dir / "model.zarr")
-        setup_logging(base_dir / "chat_eval" / f"{args.checkpoint}.txt")
+        setup_logging(model_dir / "chat_eval" / f"{args.checkpoint}.txt")
 
         print0(f"Loading model from {checkpoint_dir}")
         seed = 42
@@ -220,7 +220,7 @@ if __name__ == "__main__":
             centered_results[task_name] = (acc - baseline_acc) / (1.0 - baseline_acc)
             print0(f"{task_name} accuracy: {100 * acc:.2f}%")
 
-        output_csv_path = base_dir / "chat_eval" / f"{args.checkpoint}.csv"
+        output_csv_path = model_dir / "chat_eval" / f"{args.checkpoint}.csv"
         output_csv_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_csv_path, 'w', encoding='utf-8', newline='') as f:
             f.write(f"{'Task':<35}, {'Accuracy':<10}, {'Centered':<10}\n")

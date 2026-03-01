@@ -14,8 +14,10 @@ import tempfile
 import jax
 import jax.numpy as jnp
 
-from nanojax.common import get_base_dir, print0, init_distributed, setup_logging
-from nanojax.tokenizer import get_tokenizer
+from nanojax.common import get_base_dir, get_model_dir, print0, init_distributed, setup_logging
+from nanojax.dataloader import get_distributed_dataloader
+from nanojax.eval import evaluate_bpb
+from nanojax.tokenizer import get_tokenizer, get_token_bytes
 from nanojax.checkpointing import load_checkpoint, load_model_config
 from nanojax.gpt import GPT
 from nanojax.core_eval import evaluate_task
@@ -113,7 +115,7 @@ def evaluate_model(model, tokenizer, minibatch_size, compute_dtype, mesh, max_pe
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--checkpoint', type=str, default='mid', help='Checkpoint to evaluate: base|mid')
+    parser.add_argument('--checkpoint', type=str, default='base', help='Checkpoint to evaluate: base|mid')
     parser.add_argument('--max-per-task', type=int, default=-1, help='Max examples per task (-1 = disable)')
     parser.add_argument('--compute-dtype', type=str, default='bfloat16', help='Compute dtype: float32|bfloat16')
     parser.add_argument('--attn-impl', type=str, default="splash", help="Attention backend: splash (TPU) or eager")
@@ -124,21 +126,33 @@ def main():
     if jax.process_index() == 0:
         compute_dtype = jnp.bfloat16 if args.compute_dtype == 'bfloat16' else jnp.float32
 
-        base_dir = get_base_dir()
-        checkpoint_dir = base_dir / f"{args.checkpoint}_checkpoints"
+        model_dir = get_model_dir()
+        checkpoint_dir = model_dir / f"{args.checkpoint}_checkpoints"
         model_cfg = load_model_config(checkpoint_dir / "model.zarr")
 
-        setup_logging(base_dir / "base_eval" / f"{args.checkpoint}.txt")
+        setup_logging(model_dir / "base_eval" / f"{args.checkpoint}.txt")
         print0(f"Loading model from {checkpoint_dir}")
         rng = jax.random.key(42)
         model = GPT.init(model_cfg, rng, attn_impl=args.attn_impl)
         model = load_checkpoint(checkpoint_dir / "model.zarr", model)
 
         tokenizer = get_tokenizer()
+        token_bytes = get_token_bytes()
+        max_seq_len = model_cfg.sequence_len
 
         out = evaluate_model(model, tokenizer, args.minibatch_size, compute_dtype, mesh, max_per_task=args.max_per_task)
-    
-        output_csv_path = base_dir / "base_eval" / f"{args.checkpoint}.csv"
+
+        # bpb evaluation
+        eval_tokens = args.minibatch_size * max_seq_len * 40 * world_size
+        eval_steps = eval_tokens // (args.minibatch_size * max_seq_len * world_size)
+        fwe_val_loader = get_distributed_dataloader(args.minibatch_size, max_seq_len, "val", tokenizer, 0.0, mesh)
+        sv2_val_loader = get_distributed_dataloader(args.minibatch_size, max_seq_len, "val", tokenizer, 1.0, mesh)
+        fwe_bpb = evaluate_bpb(model, fwe_val_loader, eval_steps, token_bytes, compute_dtype, mesh)
+        sv2_bpb = evaluate_bpb(model, sv2_val_loader, eval_steps, token_bytes, compute_dtype, mesh)
+        avg_bpb = (fwe_bpb + sv2_bpb) / 2
+        print0(f"fwe_bpb: {float(fwe_bpb):.4f} | sv2_bpb: {float(sv2_bpb):.4f} | avg_bpb: {float(avg_bpb):.4f}")
+
+        output_csv_path = model_dir / "base_eval" / f"{args.checkpoint}.csv"
         output_csv_path.parent.mkdir(parents=True, exist_ok=True)
 
         results = out["results"]
@@ -150,6 +164,9 @@ def main():
             for label in results:
                 f.write(f"{label:<35}, {results[label]:<10.6f}, {centered_results[label]:<10.6f}\n")
             f.write(f"{'CORE':<35}, {'':<10}, {core_metric:<10.6f}\n")
+            f.write(f"{'fwe_bpb':<35}, {float(fwe_bpb):<10.6f}, {'':<10}\n")
+            f.write(f"{'sv2_bpb':<35}, {float(sv2_bpb):<10.6f}, {'':<10}\n")
+            f.write(f"{'avg_bpb':<35}, {float(avg_bpb):<10.6f}, {'':<10}\n")
 
         print0("="*80)
         print0(f"model: {args.checkpoint}")

@@ -2,13 +2,13 @@
 Evaluate compression ratio of the tokenizer.
 """
 
-from nanojax.common import get_base_dir, init_distributed, print0, setup_logging
-from nanojax.dataset import parquets_iter_batched
+from nanojax.common import get_model_dir, init_distributed, print0, setup_logging
+from data.pretrain import parquets_iter_batched
 from nanojax.tokenizer import RustBPETokenizer, get_tokenizer
 
 # distributed/logging setup
-base_dir = get_base_dir()
-setup_logging(base_dir / "tok_eval.txt")
+model_dir = get_model_dir()
+setup_logging(model_dir / "tok_eval.txt")
 init_distributed()
 
 # Random text I got from a random website this morning
@@ -150,10 +150,14 @@ Photosynthesis is a photochemical energy transduction process in which light-har
 """.strip()
 
 # The tokenizer was trained on data from earlier shards, so it has seen this data
-train_docs = next(parquets_iter_batched(split="train"))
-train_text = "\n".join(train_docs)
-val_docs = next(parquets_iter_batched(split="val"))
-val_text = "\n".join(val_docs)
+fwe_train_docs = next(parquets_iter_batched("fineweb-edu", split="train"))
+fwe_train_text = "\n".join(fwe_train_docs)
+fwe_val_docs = next(parquets_iter_batched("fineweb-edu", split="val"))
+fwe_val_text = "\n".join(fwe_val_docs)
+sv2_train_docs = next(parquets_iter_batched("the-stack-v2-dedup", split="train"))
+sv2_train_text = "\n".join(sv2_train_docs)
+sv2_val_docs = next(parquets_iter_batched("the-stack-v2-dedup", split="val"))
+sv2_val_text = "\n".join(sv2_val_docs)
 
 all_text = [
     ("news", news_text),
@@ -161,10 +165,13 @@ all_text = [
     ("code", code_text),
     ("math", math_text),
     ("science", science_text),
-    ("fwe-train", train_text),
+    ("fwe-train", fwe_train_text),
+    ("sv2-train", sv2_train_text),
 ]
-if val_text:
-    all_text.append(("fwe-val", val_text))
+if fwe_val_text:
+    all_text.append(("fwe-val", fwe_val_text))
+if sv2_val_text:
+    all_text.append(("sv2-val", sv2_val_text))
 
 # Try out current default compared to GPT-2 and GPT-4 tokenizers
 tokenizer_results = {}

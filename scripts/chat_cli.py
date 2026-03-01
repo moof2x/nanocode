@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 
 from nanojax.checkpointing import load_checkpoint, load_model_config
-from nanojax.common import get_base_dir, print0
+from nanojax.common import get_base_dir, get_model_dir, print0
 from nanojax.generation import generate
 from nanojax.gpt import GPT
 from nanojax.tokenizer import get_tokenizer
@@ -19,12 +19,12 @@ temperature = 0.6
 exec(open(os.path.join("nanojax", "configurator.py")).read()) # overrides from command line
 
 tokenizer = get_tokenizer()
-base_dir = get_base_dir()
-checkpoint_dir = base_dir / f"{checkpoint}_checkpoints"
+model_dir = get_model_dir()
+checkpoint_dir = model_dir / f"{checkpoint}_checkpoints"
 model_cfg = load_model_config(checkpoint_dir / "model.zarr")
 
 command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
-print0(f"NANOJAX_BASE_DIR={base_dir} {command}")
+print0(f"NANOJAX_BASE_DIR={get_base_dir()} MODEL_TAG={os.environ.get('MODEL_TAG', '')} {command}")
 
 rng = jax.random.key(seed)
 
