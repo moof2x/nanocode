@@ -7,12 +7,12 @@ import jax
 import jax.numpy as jnp
 
 from nanojax.checkpointing import load_checkpoint, load_model_config
-from nanojax.common import get_base_dir
+from nanojax.common import get_model_dir
 from nanojax.generation import generate
 from nanojax.gpt import GPT
 from nanojax.tokenizer import get_tokenizer
 
-checkpoint = "mid"
+checkpoint = "dpo"
 compute_dtype = jnp.bfloat16
 max_tokens = 512
 seed = 42
@@ -23,8 +23,8 @@ verbose = False
 exec(open(os.path.join("nanojax", "configurator.py")).read())
 
 tokenizer = get_tokenizer()
-base_dir = get_base_dir()
-checkpoint_dir = base_dir / f"{checkpoint}_checkpoints"
+model_dir = get_model_dir()
+checkpoint_dir = model_dir / f"{checkpoint}_checkpoints"
 model_cfg = load_model_config(checkpoint_dir / "model.zarr")
 rng = jax.random.key(seed)
 model = GPT.init(model_cfg, rng, "eager")
@@ -183,7 +183,7 @@ def run_agent(tokens, rng):
 def print_help():
     print("""
 commands:
-  /user <message>  - send message to the agent
+  <message>  - send message to the agent
   /clear           - clear conversation and context
   /show            - show token count
   /export [file]   - export tokens to json
