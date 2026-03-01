@@ -5,3 +5,4 @@ dev-ignore/
 report.md
 eval_bundle/
 uv.lock
+reports/
