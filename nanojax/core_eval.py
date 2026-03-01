@@ -221,7 +221,7 @@ def evaluate_task(model, tokenizer, minibatch_size, data, task_meta, compute_dty
             answers.append(batch_answers)
             cursor += 1
 
-        # pad and stack sequences to a fixed bucket size
+        # stack and pad sequences to a fixed bucket size
         idx, masks = collate(idx, masks, ignore_idx, max_seq_len)
         # forward samples through our model
         loss, pred_match, sequence_lengths = eval_forward(idx, masks, model, compute_dtype, ignore_idx, mesh)

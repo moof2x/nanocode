@@ -259,14 +259,14 @@ class RustBPETokenizer:
 # -----------------------------------------------------------------------------
 
 def get_tokenizer():
-    from nanojax.common import get_base_dir
-    return RustBPETokenizer.from_directory(get_base_dir() / "tokenizer")
+    from nanojax.common import get_model_dir
+    return RustBPETokenizer.from_directory(get_model_dir() / "tokenizer")
 
 def get_token_bytes():
     import zarr
 
-    from nanojax.common import get_base_dir
-    tokenizer_dir = get_base_dir() / "tokenizer"
+    from nanojax.common import get_model_dir
+    tokenizer_dir = get_model_dir() / "tokenizer"
     token_bytes_path = tokenizer_dir / "token_bytes.zarr"
     
     assert token_bytes_path.exists(), f"Token bytes not found at {token_bytes_path}? It gets written by tok_train.py"

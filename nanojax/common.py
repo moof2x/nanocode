@@ -10,13 +10,18 @@ def print0(s="", **kwargs):
 
 
 def get_base_dir() -> Path:
-    # co-locate nanojax intermediates with other cached data in ~/.cache (by default)
-    if os.environ.get("NANOJAX_BASE_DIR"):
-        nanojax_dir = Path(os.environ.get("NANOJAX_BASE_DIR"))
-    else:
-        nanojax_dir = Path.home() / ".cache" / "nanojax"
-    nanojax_dir.mkdir(parents=True, exist_ok=True)
-    return nanojax_dir
+    base_dir = Path(os.environ.get("NANOJAX_BASE_DIR", Path.home() / ".cache" / "nanojax"))
+    base_dir.mkdir(parents=True, exist_ok=True)
+    return base_dir
+
+def get_model_dir() -> Path:
+    base_dir = get_base_dir()
+    tag = os.environ.get("MODEL_TAG")
+    if not tag:
+        return base_dir
+    model_dir = base_dir / tag
+    model_dir.mkdir(parents=True, exist_ok=True)
+    return model_dir
 
 
 def setup_logging(log_path):
