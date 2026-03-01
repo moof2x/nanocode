@@ -2,28 +2,33 @@ from functools import partial
 
 import jax
 import numpy as np
+import random
 
-from nanojax.dataset import parquets_iter_batched
+from data.pretrain import parquets_iter_batched
 
 
-def tokenizing_data_loader(B, T, split, tokenizer, tokenizer_threads=4, tokenizer_batch_size=128, buffer_size=1000):
+def document_batch_iterator(split, rank, world_size, tokenizer_batch_size, code_ratio):
+    def parquet_iter(dataset):
+        while True:
+            yield from parquets_iter_batched(dataset, split=split, start=rank, step=world_size)
+
+    fineweb = parquet_iter("fineweb-edu") if code_ratio < 1 else None
+    stack_v2 = parquet_iter("the-stack-v2-dedup") if code_ratio > 0 else None
+    batch_iter = lambda: stack_v2 if stack_v2 and (not fineweb or random.random() < code_ratio) else fineweb
+    while True:
+        batch = next(batch_iter())
+        for i in range(0, len(batch), tokenizer_batch_size):
+            yield batch[i:i+tokenizer_batch_size]
+
+
+def tokenizing_data_loader(B, T, split, tokenizer, code_ratio, tokenizer_threads=4, tokenizer_batch_size=128, buffer_size=1000):
     assert split in ["train", "val"], "split must be 'train' or 'val'"
     bos_token = tokenizer.get_bos_token_id()
-    # document buffer holds tokenized documents for best-fit packing
     doc_buffer = []
     B *= jax.local_device_count() # per-device batch size to process batch size
-    row_capacity = T + 1 # +1 is because we also need the target at the last token
     world_size, rank = jax.process_count(), jax.process_index()
 
-    # infinite iterator over document batches
-    def document_batch_iterator():
-        while True:
-            # batch will iterate in group size of the parquet files, usually e.g. 1024 rows
-            for batch in parquets_iter_batched(split=split, start=rank, step=world_size):
-                # for the tokenizer we might want to go in usually smaller batches, e.g. 128 rows
-                for i in range(0, len(batch), tokenizer_batch_size):
-                    yield batch[i:i+tokenizer_batch_size]
-    batch_iterator = document_batch_iterator()
+    batch_iterator = document_batch_iterator(split, rank, world_size, tokenizer_batch_size, code_ratio)
     # we'll use a single buffer for our collated tokens
     row_buffer = np.empty((B, T + 1), dtype=np.int32)
     while True:
@@ -64,10 +69,10 @@ def tokenizing_data_loader(B, T, split, tokenizer, tokenizer_threads=4, tokenize
         targets = row_buffer[:, 1:]
         yield inputs, targets
 
-def get_distributed_dataloader(batch_size, seq_len, split, tokenizer, mesh):
+def get_distributed_dataloader(batch_size, seq_len, split, tokenizer, code_ratio, mesh):
     sharding = jax.NamedSharding(mesh, jax.P("b", None))
     global_batch_size = batch_size * jax.local_device_count() * jax.process_count()
-    loader = tokenizing_data_loader(batch_size, seq_len, split, tokenizer)
+    loader = tokenizing_data_loader(batch_size, seq_len, split, tokenizer, code_ratio)
     return map(
         partial(jax.make_array_from_process_local_data, sharding, global_shape=(global_batch_size, seq_len)),
         loader

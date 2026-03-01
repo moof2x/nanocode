@@ -10,6 +10,7 @@ Taken from karparthy/nanochat/nanochat/dataset.py
 
 import argparse
 import time
+from functools import partial
 from multiprocessing import Pool
 from pathlib import Path
 
@@ -22,8 +23,6 @@ from nanojax.common import get_base_dir, init_distributed, print0
 # The specifics of the current pretraining dataset
 
 # The URL on the internet where the data is hosted and downloaded from on demand
-BASE_URL = "https://huggingface.co/datasets/karpathy/fineweb-edu-100b-shuffle/resolve/main"
-MAX_SHARD = 1822 # the last datashard is shard_01822.parquet
 index_to_filename = lambda index: f"shard_{index:05d}.parquet" # format of the filenames
 
 DATA_DIR = get_base_dir() / "base_data"
@@ -32,19 +31,20 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 # -----------------------------------------------------------------------------
 # These functions are useful utilities to other modules, can/should be imported
 
-def list_parquet_files(data_dir: Path=None):
+def list_parquet_files(data_dir: Path):
     """ Looks into a data dir and returns full paths to all parquet files. """
-    data_dir = DATA_DIR if data_dir is None else data_dir
     return sorted([data_dir / f for f in data_dir.iterdir() if f.suffix == ".parquet"])
 
-def parquets_iter_batched(split: str, start: int=0, step: int=1):
+def parquets_iter_batched(dataset: str, split: str, start: int=0, step: int=1):
     """
     Iterate through the dataset, in batches of underlying row_groups for efficiency.
     - split can be "train" or "val". the last parquet file will be val.
     - start/step are useful for skipping rows in DDP. e.g. start=rank, step=world_size
     """
+    assert dataset in ["fineweb-edu", "the-stack-v2-dedup"], "dataset must be one of 'fineweb-edu' or 'the-stack-v2-dedup'"
     assert split in ["train", "val"], "split must be 'train' or 'val'"
-    parquet_paths = list_parquet_files()
+    data_dir = DATA_DIR / dataset
+    parquet_paths = list_parquet_files(data_dir)
     parquet_paths = parquet_paths[:-1] if split == "train" else parquet_paths[-1:]
     for filepath in parquet_paths:
         pf = pq.ParquetFile(filepath)
@@ -54,18 +54,18 @@ def parquets_iter_batched(split: str, start: int=0, step: int=1):
             yield texts
 
 # -----------------------------------------------------------------------------
-def download_single_file(index: int):
+def download_single_file(index: int, base_url: str, data_dir: Path):
     """ Downloads a single file index, with some backoff """
 
     # Construct the local filepath for this file and skip if it already exists
     filename = index_to_filename(index)
-    filepath = DATA_DIR / filename
+    filepath = data_dir / filename
     if filepath.exists():
         print0(f"Skipping {filepath} (already exists)")
         return True
 
     # Construct the remote URL for this file
-    url = f"{BASE_URL}/{filename}"
+    url = f"{base_url}/{filename}"
     print0(f"Downloading {filename}...")
 
     # Download with retries
@@ -103,19 +103,28 @@ def download_single_file(index: int):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Download FineWeb-Edu 100BT dataset shards")
+    parser = argparse.ArgumentParser(description="Download pretraining dataset shards")
+    parser.add_argument("-d", "--dataset", type=str, choices=["fineweb-edu", "the-stack-v2-dedup"], required=True)
     parser.add_argument("-n", "--num-files", type=int, default=-1, help="Number of shards to download (default: -1), -1 = disable")
     parser.add_argument("-w", "--num-workers", type=int, default=4, help="Number of parallel download workers (default: 4)")
     args = parser.parse_args()
 
-    num = MAX_SHARD + 1 if args.num_files == -1 else min(args.num_files, MAX_SHARD + 1)
+    if args.dataset == "fineweb-edu":
+        base_url = "https://huggingface.co/datasets/karpathy/fineweb-edu-100b-shuffle/resolve/main"
+        max_shard = 1822
+    elif args.dataset == "the-stack-v2-dedup":
+        base_url = "https://huggingface.co/datasets/smohammadi/the-stack-v2-python-shuffle/resolve/main"
+        max_shard = 79
+
+    data_dir = DATA_DIR / args.dataset
+    data_dir.mkdir(parents=True, exist_ok=True)
+    num = max_shard + 1 if args.num_files == -1 else min(args.num_files, max_shard + 1)
     ids_to_download = list(range(num))
     init_distributed()
     print0(f"Downloading {len(ids_to_download)} shards using {args.num_workers} workers...")
-    print0(f"Target directory: {DATA_DIR}")
+    print0(f"Target directory: {data_dir}")
     with Pool(processes=args.num_workers) as pool:
-        results = pool.map(download_single_file, ids_to_download)
+        results = pool.map(partial(download_single_file, base_url=base_url, data_dir=data_dir), ids_to_download)
 
-    # Report results
     successful = sum(1 for success in results if success)
-    print0(f"Done! Downloaded: {successful}/{len(ids_to_download)} shards to {DATA_DIR}")
+    print0(f"Done! Downloaded: {successful}/{len(ids_to_download)} shards to {data_dir}")
