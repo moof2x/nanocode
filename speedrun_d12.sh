@@ -3,6 +3,7 @@
 START_TIME=$SECONDS
 
 # all the setup stuff
+source "$HOME/.local/bin/env"
 export OMP_NUM_THREADS=1
 export NANOJAX_BASE_DIR="$HOME/.cache/nanojax"
 export MODEL_TAG=d12
@@ -48,10 +49,12 @@ python -u -m scripts.dpo \
     --eval_every=100 \
     --sample_every=100
 
-python -m scripts.report && uvx pandoc reports/d12/report.md -o reports/d12/report.html
+python -m scripts.report
 
 ELAPSED=$(( SECONDS - START_TIME ))
 echo "speedrun_d12 total time: $(( ELAPSED / 3600 ))h $(( (ELAPSED % 3600) / 60 ))m $(( ELAPSED % 60 ))s"
-echo "to view your report, copy reports/d12/ to your local machine, e.g. using scp"
+echo "copy reports/d12/ to your local machine, e.g. using scp, then:"
+echo "  brew install pandoc"
+echo "  pandoc reports/d12/report.md -o reports/d12/report.html --standalone"
 echo "to chat with your model:"
 echo "  NANOJAX_BASE_DIR=$NANOJAX_BASE_DIR MODEL_TAG=$MODEL_TAG python -m scripts.nanocode --max_tokens=1024"
