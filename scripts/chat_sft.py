@@ -42,7 +42,7 @@ init_lr_frac = 0.05
 
 ### misc
 seed = 42
-accelerator_flops = 11.15e12  # 2080 super FLOPs/sec
+accelerator_flops = 918e12 # TPU v6e
 compute_dtype = jnp.bfloat16
 attn_impl = "splash"
 

@@ -23,7 +23,6 @@ python -u -m scripts.base_train \
     --batch_size=64 \
     --minibatch_size=2 \
     --config=configs.d20 \
-    --accelerator_flops=918e12 \
     --eval_every=500 \
     --sample_every=500
 python -u -m scripts.base_eval --checkpoint=base --minibatch-size=8
@@ -36,7 +35,6 @@ hf download smohammadi/nanocode-long-context --repo-type dataset --local-dir "$R
 python -u -m scripts.chat_sft \
     --batch_size=64 \
     --minibatch_size=2 \
-    --accelerator_flops=918e12 \
     --eval_every=500 \
     --sample_every=500
 
@@ -47,7 +45,6 @@ hf download smohammadi/nanocode-long-context-preference --repo-type dataset --lo
 python -u -m scripts.dpo \
     --batch_size=32 \
     --minibatch_size=2 \
-    --accelerator_flops=918e12 \
     --eval_every=100 \
     --sample_every=100
 

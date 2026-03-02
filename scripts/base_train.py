@@ -41,7 +41,7 @@ lr = 0.02
 code_ratio = 0.2
 seed = 42
 param_data_ratio = 8
-accelerator_flops = 11.15e12 # 2080 super FLOPs/sec
+accelerator_flops = 918e12 # TPU v6e
 compute_dtype = jnp.bfloat16
 attn_impl = "splash"
 

@@ -43,7 +43,7 @@ lr = 0.00005
 ### misc
 seed = 42
 attn_impl = "splash"
-accelerator_flops = 11.15e12  # 2080 super FLOPs/sec
+accelerator_flops = 918e12 # TPU v6e
 compute_dtype = jnp.bfloat16
 
 ### training loop control
