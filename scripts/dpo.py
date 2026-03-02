@@ -15,8 +15,8 @@ from nanojax.eval import evaluate_bpb
 from nanojax.gpt import GPT, estimate_flops
 from nanojax.muon import Muon
 from nanojax.tokenizer import get_token_bytes, get_tokenizer
-from data.dataset import PreferenceDataset, JSONPreferenceDataset, PairedJSONPreferenceDataset
-from data.json_dataset import JSONDataset
+from data.dataset import PreferenceDataset
+from data.json_dataset import JSONDataset, JSONPreferenceDataset, PairedJSONPreferenceDataset
 from data.common import SYSTEM_PROMPT
 from data.mixture import TaskMixture
 
@@ -54,6 +54,7 @@ profile_every = 500
 config_keys = [k for k,v in globals().items() if not k.startswith("_") and isinstance(v, (int, float, bool, str))] + ["compute_dtype"]
 exec(open(os.path.join("nanojax", "configurator.py")).read()) # overrides from command line
 base_dir = get_base_dir()
+rollouts_dir = base_dir / "rollouts"
 model_dir = get_model_dir()
 setup_logging(model_dir / "dpo_log.txt")
 user_config = {k: globals()[k] for k in config_keys}
@@ -104,19 +105,22 @@ state = Muon.init(
     lr=lr,
 )
 
+# we use PairedJSONPreferenceDataset over JSONPreferenceDataset to filter out
+# pairs where either chosen or rejected has no assistant content
+# I found this improved performance a bit in my specific synthetic datasets
 train_ds = TaskMixture([
-    PairedJSONPreferenceDataset("rollouts/all.pref_train.jsonl", seed),
-    PairedJSONPreferenceDataset("rollouts/preference_rollouts.jsonl", seed),
+    PairedJSONPreferenceDataset(rollouts_dir / "nanocode-tulu-selfoss-evol-preference/all.pref_train.jsonl", seed),
+    PairedJSONPreferenceDataset(rollouts_dir / "nanocode-long-context-preference/preference_rollouts_train.jsonl", seed),
 ], seed)
 
 val_pref_ds = TaskMixture([
-    PairedJSONPreferenceDataset("rollouts/all.pref_test.jsonl", seed),
-    PairedJSONPreferenceDataset("rollouts/preference_rollouts_test.jsonl", seed),
+    PairedJSONPreferenceDataset(rollouts_dir / "nanocode-tulu-selfoss-evol-preference/all.pref_test.jsonl", seed),
+    PairedJSONPreferenceDataset(rollouts_dir / "nanocode-long-context-preference/preference_rollouts_test.jsonl", seed),
 ], seed)
 
 val_bpb_ds = TaskMixture([
-    JSONDataset("rollouts/all_test.jsonl"),
-    JSONDataset("rollouts/rollouts_test.jsonl"),
+    JSONDataset(rollouts_dir / "nanocode-tulu-selfoss-evol/all_test.jsonl", seed),
+    JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_test.jsonl", seed),
 ], seed)
 
 

@@ -54,6 +54,7 @@ profile_every = 500
 config_keys = [k for k,v in globals().items() if not k.startswith("_") and isinstance(v, (int, float, bool, str))] + ["compute_dtype"]
 exec(open(os.path.join("nanojax", "configurator.py")).read()) # overrides from command line
 base_dir = get_base_dir()
+rollouts_dir = base_dir / "rollouts"
 model_dir = get_model_dir()
 setup_logging(model_dir / "chat_sft_log.txt")
 user_config = {k: globals()[k] for k in config_keys}
@@ -109,19 +110,19 @@ train_ds = TaskMixture(
         # general chat templating and instruction following
         Dataset("HuggingFaceTB/smol-smoltalk", "messages", "train[:40%]", seed),
         ### agentic rollout data: 1 epoch of ~100k rows of single-turn interactions, 5 epochs of ~2k rows of long-form agentic interactions
-        JSONDataset("rollouts/all_train.jsonl"),  # 2 epochs of simple-ish tool calling rollouts (~100k)
-        JSONDataset("rollouts/rollouts_train.jsonl"),  # 5 epochs of long-context rollouts at 2K each
-        JSONDataset("rollouts/rollouts_train.jsonl"),
-        JSONDataset("rollouts/rollouts_train.jsonl"),
-        JSONDataset("rollouts/rollouts_train.jsonl"),
-        JSONDataset("rollouts/rollouts_train.jsonl"),
+        JSONDataset(rollouts_dir / "nanocode-tulu-selfoss-evol/all_train.jsonl", seed),
+        JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_train.jsonl", seed),  # 5 epochs of long-context rollouts at 2K each
+        JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_train.jsonl", seed),
+        JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_train.jsonl", seed),
+        JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_train.jsonl", seed),
+        JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_train.jsonl", seed),
     ],
     seed
 )
 
 val_ds_rollout = TaskMixture([
-    JSONDataset("rollouts/all_test.jsonl"),
-    JSONDataset("rollouts/rollouts_test.jsonl"),
+    JSONDataset(rollouts_dir / "nanocode-tulu-selfoss-evol/all_test.jsonl", seed),
+    JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_test.jsonl", seed),
 ], seed)
 
 val_ds_chat = TaskMixture([
