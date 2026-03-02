@@ -9,8 +9,8 @@ export NANOJAX_BASE_DIR="$HOME/.cache/nanojax"
 export MODEL_TAG=d3
 
 # train tokenizer on ~1B characters
-python -m data.pretrain -d fineweb-edu -n 1
-python -m data.pretrain -d the-stack-v2-dedup -n 1
+python -m data.pretrain -d fineweb-edu -n 2
+python -m data.pretrain -d the-stack-v2-dedup -n 2
 
 if [ ! -d "$NANOJAX_BASE_DIR/$MODEL_TAG/tokenizer" ]; then
     python -m scripts.tok_train --max_chars=1000000000 --vocab_size=8000
