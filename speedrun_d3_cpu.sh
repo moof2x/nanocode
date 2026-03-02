@@ -4,7 +4,6 @@
 START_TIME=$SECONDS
 
 # all the setup stuff
-source "$HOME/.local/bin/env"
 export OMP_NUM_THREADS=1
 export NANOJAX_BASE_DIR="$HOME/.cache/nanojax"
 export MODEL_TAG=d3
@@ -18,40 +17,40 @@ if [ ! -d "$NANOJAX_BASE_DIR/$MODEL_TAG/tokenizer" ]; then
     python -m scripts.tok_eval
 fi
 
-# python -u -m scripts.base_train \
-#     --batch_size=128 \
-#     --minibatch_size=128 \
-#     --config=configs.d3 \
-#     --attn_impl=eager \
-#     --num_steps=10 \
-#     --eval_every=10 \
-#     --sample_every=10
-# python -u -m scripts.base_eval --checkpoint=base --minibatch-size=8 --attn-impl=eager
+python -u -m scripts.base_train \
+    --batch_size=128 \
+    --minibatch_size=128 \
+    --config=configs.d3 \
+    --attn_impl=eager \
+    --num_steps=10 \
+    --eval_every=10 \
+    --sample_every=10
+python -u -m scripts.base_eval --checkpoint=base --minibatch-size=8 --attn-impl=eager
 
-# # download SFT rollout datasets
-# ROLLOUTS_DIR="$NANOJAX_BASE_DIR/rollouts"
-# hf download smohammadi/nanocode-tulu-selfoss-evol --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-tulu-selfoss-evol"
-# hf download smohammadi/nanocode-long-context --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context"
+# download SFT rollout datasets
+ROLLOUTS_DIR="$NANOJAX_BASE_DIR/rollouts"
+hf download smohammadi/nanocode-tulu-selfoss-evol --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-tulu-selfoss-evol"
+hf download smohammadi/nanocode-long-context --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context"
 
-# python -u -m scripts.chat_sft \
-#     --batch_size=128 \
-#     --minibatch_size=128 \
-#     --attn_impl=eager \
-#     --num_steps=10 \
-#     --eval_every=10 \
-#     --sample_every=10
+python -u -m scripts.chat_sft \
+    --batch_size=128 \
+    --minibatch_size=128 \
+    --attn_impl=eager \
+    --num_steps=10 \
+    --eval_every=10 \
+    --sample_every=10
 
-# # download DPO preference datasets
-# hf download smohammadi/nanocode-tulu-selfoss-evol-preference --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-tulu-selfoss-evol-preference"
-# hf download smohammadi/nanocode-long-context-preference --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context-preference"
+# download DPO preference datasets
+hf download smohammadi/nanocode-tulu-selfoss-evol-preference --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-tulu-selfoss-evol-preference"
+hf download smohammadi/nanocode-long-context-preference --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context-preference"
 
-# python -u -m scripts.dpo \
-#     --batch_size=128 \
-#     --minibatch_size=128 \
-#     --attn_impl=eager \
-#     --num_steps=10 \
-#     --eval_every=10 \
-#     --sample_every=10
+python -u -m scripts.dpo \
+    --batch_size=128 \
+    --minibatch_size=128 \
+    --attn_impl=eager \
+    --num_steps=10 \
+    --eval_every=10 \
+    --sample_every=10
 
 python -m scripts.report
 

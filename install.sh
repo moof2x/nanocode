@@ -1,4 +1,4 @@
-
+#!/bin/bash
 DEVICE=${1:-tpu}
 
 # install uv (if not already installed)
