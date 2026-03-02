@@ -19,7 +19,7 @@ from data.sequence import TaskSequence
 from data.mixture import TaskMixture
 from data.json_dataset import JSONDataset
 from data.common import SYSTEM_PROMPT
-from data.dataset import Dataset
+from data.dataset import HuggingFaceDataset
 
 # distributed setup
 world_size, mesh = init_distributed()
@@ -108,7 +108,7 @@ model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 train_ds = TaskMixture(
     [
         # general chat templating and instruction following
-        Dataset("HuggingFaceTB/smol-smoltalk", "messages", "train[:40%]", seed),
+        HuggingFaceDataset("HuggingFaceTB/smol-smoltalk", "messages", "train[:40%]", seed),
         ### agentic rollout data: 1 epoch of ~100k rows of single-turn interactions, 5 epochs of ~2k rows of long-form agentic interactions
         JSONDataset(rollouts_dir / "nanocode-tulu-selfoss-evol/all_train.jsonl", seed),
         JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_train.jsonl", seed),  # 5 epochs of long-context rollouts at 2K each
@@ -126,8 +126,8 @@ val_ds_rollout = TaskMixture([
 ], seed)
 
 val_ds_chat = TaskMixture([
-    Dataset("HuggingFaceH4/no_robots", "messages", "test", seed),
-    Dataset("HuggingFaceTB/everyday-conversations-llama3.1-2k", "messages", "test_sft", seed),
+    HuggingFaceDataset("HuggingFaceH4/no_robots", "messages", "test", seed),
+    HuggingFaceDataset("HuggingFaceTB/everyday-conversations-llama3.1-2k", "messages", "test_sft", seed),
 ], seed)
 
 

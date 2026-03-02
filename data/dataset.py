@@ -5,7 +5,7 @@ Generic dataset loaders for huggingface datasets.
 from datasets import load_dataset
 
 
-class Dataset:
+class HuggingFaceDataset:
     """
     Generic dataset loader.
     """
