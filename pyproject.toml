@@ -18,9 +18,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cuda = ["jax", "jaxlib", "jax-cuda12-plugin[with-cuda]", "jax-cuda12-pjrt"]
-cpu = ["jax", "jaxlib"]
-tpu = ["jax", "jaxlib", "libtpu", "requests"]
+cuda = ["jax==0.9.0", "jaxlib==0.9.0", "jax-cuda12-plugin[with-cuda]==0.9.0", "jax-cuda12-pjrt==0.9.0"]
+cpu = ["jax==0.9.0", "jaxlib==0.9.0"]
+tpu = ["jax==0.9.0", "jaxlib==0.9.0", "libtpu", "requests"]
 
 [[tool.uv.index]]
 name = "jax-nightly"
