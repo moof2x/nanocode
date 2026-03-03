@@ -18,9 +18,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-cuda = ["jax[cuda12]"]
-cpu = ["jax"]
+cuda = ["jax", "jaxlib", "jax-cuda12-plugin[with-cuda]", "jax-cuda12-pjrt"]
+cpu = ["jax", "jaxlib"]
 tpu = ["jax", "jaxlib", "libtpu", "requests"]
+
+[[tool.uv.index]]
+name = "jax-nightly"
+url = "https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/"
+explicit = true
+
+[tool.uv.sources]
+jax = { index = "jax-nightly" }
+jaxlib = { index = "jax-nightly" }
+jax-cuda12-plugin = { index = "jax-nightly" }
+jax-cuda12-pjrt = { index = "jax-nightly" }
+libtpu = { index = "jax-nightly" }
 
 [tool.uv]
 find-links = [
