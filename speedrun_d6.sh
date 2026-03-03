@@ -26,7 +26,7 @@ python -u -m scripts.base_train \
     --config=configs.d6 \
     --eval_every=500 \
     --sample_every=500
-python -u -m scripts.base_eval --checkpoint=base --minibatch-size=8
+python -u -m scripts.base_eval --checkpoint=base --minibatch-size=256 --max-per-task=500
 
 # download SFT rollout datasets
 ROLLOUTS_DIR="$NANOJAX_BASE_DIR/rollouts"
