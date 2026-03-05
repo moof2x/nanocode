@@ -3,7 +3,6 @@
 START_TIME=$SECONDS
 
 # all the setup stuff
-source "$HOME/.local/bin/env"
 export OMP_NUM_THREADS=1
 export NANOJAX_BASE_DIR="$HOME/.cache/nanojax"
 export MODEL_TAG=d12

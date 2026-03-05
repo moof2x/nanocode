@@ -19,13 +19,13 @@ fi
 
 python -u -m scripts.base_train \
     --batch_size=128 \
-    --minibatch_size=128 \
+    --minibatch_size=32 \
     --config=configs.d3 \
     --attn_impl=eager \
     --num_steps=10 \
     --eval_every=10 \
     --sample_every=10
-python -u -m scripts.base_eval --checkpoint=base --minibatch-size=128 --max-per-task=100 --attn-impl=eager
+python -u -m scripts.base_eval --checkpoint=base --minibatch-size=32 --max-per-task=100 --attn-impl=eager
 
 # download SFT rollout datasets
 ROLLOUTS_DIR="$NANOJAX_BASE_DIR/rollouts"
@@ -34,7 +34,7 @@ hf download smohammadi/nanocode-long-context --repo-type dataset --local-dir "$R
 
 python -u -m scripts.chat_sft \
     --batch_size=128 \
-    --minibatch_size=128 \
+    --minibatch_size=32 \
     --attn_impl=eager \
     --num_steps=10 \
     --eval_every=10 \
@@ -46,7 +46,7 @@ hf download smohammadi/nanocode-long-context-preference --repo-type dataset --lo
 
 python -u -m scripts.dpo \
     --batch_size=128 \
-    --minibatch_size=128 \
+    --minibatch_size=32 \
     --attn_impl=eager \
     --num_steps=10 \
     --eval_every=10 \

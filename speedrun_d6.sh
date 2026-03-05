@@ -3,7 +3,6 @@
 START_TIME=$SECONDS
 
 # all the setup stuff
-source "$HOME/.local/bin/env"
 export OMP_NUM_THREADS=1
 export NANOJAX_BASE_DIR="$HOME/.cache/nanojax"
 export MODEL_TAG=d6
@@ -21,12 +20,12 @@ if [ ! -d "$NANOJAX_BASE_DIR/$MODEL_TAG/tokenizer" ]; then
 fi
 
 python -u -m scripts.base_train \
-    --batch_size=256 \
-    --minibatch_size=256 \
+    --batch_size=64 \
+    --minibatch_size=16 \
     --config=configs.d6 \
     --eval_every=500 \
     --sample_every=500
-python -u -m scripts.base_eval --checkpoint=base --minibatch-size=256 --max-per-task=500
+python -u -m scripts.base_eval --checkpoint=base --minibatch-size=16 --max-per-task=500
 
 # download SFT rollout datasets
 ROLLOUTS_DIR="$NANOJAX_BASE_DIR/rollouts"
@@ -34,8 +33,8 @@ hf download smohammadi/nanocode-tulu-selfoss-evol --repo-type dataset --local-di
 hf download smohammadi/nanocode-long-context --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context"
 
 python -u -m scripts.chat_sft \
-    --batch_size=256 \
-    --minibatch_size=256 \
+    --batch_size=64 \
+    --minibatch_size=16 \
     --eval_every=250 \
     --sample_every=250
 
@@ -44,8 +43,8 @@ hf download smohammadi/nanocode-tulu-selfoss-evol-preference --repo-type dataset
 hf download smohammadi/nanocode-long-context-preference --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context-preference"
 
 python -u -m scripts.dpo \
-    --batch_size=256 \
-    --minibatch_size=256 \
+    --batch_size=64 \
+    --minibatch_size=16 \
     --eval_every=100 \
     --sample_every=100
 
