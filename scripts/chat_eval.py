@@ -4,11 +4,11 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from nanojax.common import print0, init_distributed, get_model_dir, setup_logging
-from nanojax.checkpointing import load_checkpoint, load_model_config
-from nanojax.gpt import GPT
-from nanojax.tokenizer import get_tokenizer
-from nanojax.generation import generate
+from nanocode.common import print0, init_distributed, get_model_dir, setup_logging
+from nanocode.checkpointing import load_checkpoint, load_model_config
+from nanocode.gpt import GPT
+from nanocode.tokenizer import get_tokenizer
+from nanocode.generation import generate
 
 from tasks.mmlu import MMLU
 from tasks.arc import ARC

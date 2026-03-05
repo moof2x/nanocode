@@ -6,11 +6,11 @@ from pathlib import Path
 import jax
 import jax.numpy as jnp
 
-from nanojax.checkpointing import load_checkpoint, load_model_config
-from nanojax.common import get_model_dir
-from nanojax.generation import generate
-from nanojax.gpt import GPT
-from nanojax.tokenizer import get_tokenizer
+from nanocode.checkpointing import load_checkpoint, load_model_config
+from nanocode.common import get_model_dir
+from nanocode.generation import generate
+from nanocode.gpt import GPT
+from nanocode.tokenizer import get_tokenizer
 
 checkpoint = "dpo"
 compute_dtype = jnp.bfloat16
@@ -20,7 +20,7 @@ temperature = 0.6
 
 verbose = False
 
-exec(open(os.path.join("nanojax", "configurator.py")).read())
+exec(open(os.path.join("nanocode", "configurator.py")).read())
 
 tokenizer = get_tokenizer()
 model_dir = get_model_dir()

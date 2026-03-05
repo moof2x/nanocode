@@ -1,4 +1,4 @@
-from nanojax.gpt import GPTConfig
+from nanocode.gpt import GPTConfig
 
 # GPT-2 1.3B
 d24 = GPTConfig(n_layer=24, n_embed=2048, n_head=8, n_kv_head=8, vocab_size=32768, sequence_len=4096)

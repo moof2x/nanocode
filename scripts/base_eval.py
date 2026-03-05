@@ -14,13 +14,13 @@ import tempfile
 import jax
 import jax.numpy as jnp
 
-from nanojax.common import get_base_dir, get_model_dir, print0, init_distributed, setup_logging
-from nanojax.dataloader import get_distributed_dataloader
-from nanojax.eval import evaluate_bpb
-from nanojax.tokenizer import get_tokenizer, get_token_bytes
-from nanojax.checkpointing import load_checkpoint, load_model_config
-from nanojax.gpt import GPT
-from nanojax.core_eval import evaluate_task
+from nanocode.common import get_base_dir, get_model_dir, print0, init_distributed, setup_logging
+from nanocode.dataloader import get_distributed_dataloader
+from nanocode.eval import evaluate_bpb
+from nanocode.tokenizer import get_tokenizer, get_token_bytes
+from nanocode.checkpointing import load_checkpoint, load_model_config
+from nanocode.gpt import GPT
+from nanocode.core_eval import evaluate_task
 
 
 eval_bundle_url = "https://karpathy-public.s3.us-west-2.amazonaws.com/eval_bundle.zip"

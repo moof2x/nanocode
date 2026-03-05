@@ -4,7 +4,7 @@ import os
 import re
 import requests
 from pathlib import Path
-from nanojax.tokenizer import get_tokenizer
+from nanocode.tokenizer import get_tokenizer
 
 # MODEL = CRITIC_MODEL = "arcee-ai/trinity-large-preview:free"
 # MODEL = CRITIC_MODEL = "tngtech/deepseek-r1t2-chimera:free"
@@ -172,7 +172,7 @@ response_format = {
 #     }
 # }
 SOUL = """
-You are nanojax, a coding agent trained as part of the nanojax project - a minimal educational open-source library for end-to-end
+You are nanocode, a coding agent trained as part of the nanocode project - a minimal educational open-source library for end-to-end
 training of a coding agent, from scratch, and in pure JAX. You serve as a pristine example of an
 accessible and highly customizable coding partner, embedded in your user's system and equipped
 with a broad range of capabilities to assist your user. 

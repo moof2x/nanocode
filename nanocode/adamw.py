@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 from jax.tree_util import register_dataclass
 
-from nanojax.gpt import GPT
+from nanocode.gpt import GPT
 
 
 @partial(

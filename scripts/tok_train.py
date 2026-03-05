@@ -13,9 +13,9 @@ import time
 import numpy as np
 import zarr
 
-from nanojax.common import get_model_dir, init_distributed, print0, setup_logging
+from nanocode.common import get_model_dir, init_distributed, print0, setup_logging
 from data.pretrain import parquets_iter_batched
-from nanojax.tokenizer import RustBPETokenizer
+from nanocode.tokenizer import RustBPETokenizer
 
 init_distributed()
 # -----------------------------------------------------------------------------

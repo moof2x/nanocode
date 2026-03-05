@@ -6,4 +6,4 @@ To install:
   - for jax nightly on tpu: uv pip install -U --pre jax jaxlib libtpu requests -i https://us-python.pkg.dev/ml-oss-artifacts-published/jax/simple/ -f https://storage.googleapis.com/jax-releases/libtpu_releases.html
 
 
-uv run maturin develop --release --manifest-path rustbpe/Cargo.toml
+for cuda: TF_GPU_ALLOCATOR=cuda_malloc_async XLA_PYTHON_CLIENT_MEM_FRACTION=.99

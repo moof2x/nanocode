@@ -8,13 +8,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from nanojax.checkpointing import load_checkpoint, load_model_config, save_checkpoint
-from nanojax.common import get_base_dir, get_model_dir, init_distributed, print0, setup_logging
-from nanojax.generation import generate
-from nanojax.eval import evaluate_bpb
-from nanojax.gpt import GPT, estimate_flops
-from nanojax.muon import Muon
-from nanojax.tokenizer import get_token_bytes, get_tokenizer
+from nanocode.checkpointing import load_checkpoint, load_model_config, save_checkpoint
+from nanocode.common import get_base_dir, get_model_dir, init_distributed, print0, setup_logging
+from nanocode.generation import generate
+from nanocode.eval import evaluate_bpb
+from nanocode.gpt import GPT, estimate_flops
+from nanocode.muon import Muon
+from nanocode.tokenizer import get_token_bytes, get_tokenizer
 from data.dataset import PreferenceDataset
 from data.json_dataset import JSONDataset, JSONPreferenceDataset, PairedJSONPreferenceDataset
 from data.common import SYSTEM_PROMPT
@@ -52,7 +52,7 @@ eval_every = 50
 profile_every = 500
 
 config_keys = [k for k,v in globals().items() if not k.startswith("_") and isinstance(v, (int, float, bool, str))] + ["compute_dtype"]
-exec(open(os.path.join("nanojax", "configurator.py")).read()) # overrides from command line
+exec(open(os.path.join("nanocode", "configurator.py")).read()) # overrides from command line
 base_dir = get_base_dir()
 rollouts_dir = base_dir / "rollouts"
 model_dir = get_model_dir()
@@ -74,7 +74,7 @@ config = load_model_config(base_checkpoint_dir / "model.zarr")
 rng = jax.random.key(seed)
 
 command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
-print0(f"NANOJAX_BASE_DIR={base_dir} MODEL_TAG={os.environ.get('MODEL_TAG', '')} {command}")
+print0(f"NANOCODE_BASE_DIR={base_dir} MODEL_TAG={os.environ.get('MODEL_TAG', '')} {command}")
 
 max_seq_len = config.sequence_len
 eval_tokens = batch_size * max_seq_len * 20  # magic number from nanochat

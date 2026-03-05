@@ -6,8 +6,8 @@ import jax.numpy as jnp
 import numpy as np
 import zarr
 
-from nanojax.gpt import GPT, GPTConfig
-from nanojax.muon import Muon
+from nanocode.gpt import GPT, GPTConfig
+from nanocode.muon import Muon
 
 
 def save_checkpoint(filename: Path, state: GPT | Muon):

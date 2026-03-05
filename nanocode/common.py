@@ -10,7 +10,7 @@ def print0(s="", **kwargs):
 
 
 def get_base_dir() -> Path:
-    base_dir = Path(os.environ.get("NANOJAX_BASE_DIR", Path.home() / ".cache" / "nanojax"))
+    base_dir = Path(os.environ.get("NANOCODE_BASE_DIR", Path.home() / ".cache" / "nanocode"))
     base_dir.mkdir(parents=True, exist_ok=True)
     return base_dir
 

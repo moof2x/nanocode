@@ -4,11 +4,11 @@ import sys
 import jax
 import jax.numpy as jnp
 
-from nanojax.checkpointing import load_checkpoint, load_model_config
-from nanojax.common import get_base_dir, get_model_dir, print0
-from nanojax.generation import generate
-from nanojax.gpt import GPT
-from nanojax.tokenizer import get_tokenizer
+from nanocode.checkpointing import load_checkpoint, load_model_config
+from nanocode.common import get_base_dir, get_model_dir, print0
+from nanocode.generation import generate
+from nanocode.gpt import GPT
+from nanocode.tokenizer import get_tokenizer
 
 checkpoint = "mid"
 compute_dtype = jnp.bfloat16
@@ -16,7 +16,7 @@ max_tokens = 512
 seed = 42
 temperature = 0.6
 
-exec(open(os.path.join("nanojax", "configurator.py")).read()) # overrides from command line
+exec(open(os.path.join("nanocode", "configurator.py")).read()) # overrides from command line
 
 tokenizer = get_tokenizer()
 model_dir = get_model_dir()
@@ -24,7 +24,7 @@ checkpoint_dir = model_dir / f"{checkpoint}_checkpoints"
 model_cfg = load_model_config(checkpoint_dir / "model.zarr")
 
 command = f"python -m {__spec__.name} " + " ".join(sys.argv[1:])
-print0(f"NANOJAX_BASE_DIR={get_base_dir()} MODEL_TAG={os.environ.get('MODEL_TAG', '')} {command}")
+print0(f"NANOCODE_BASE_DIR={get_base_dir()} MODEL_TAG={os.environ.get('MODEL_TAG', '')} {command}")
 
 rng = jax.random.key(seed)
 
@@ -33,7 +33,7 @@ model = load_checkpoint(checkpoint_dir / "model.zarr", model)
 
 pad_token_id = tokenizer.encode_special("<|assistant_end|>")
 SOUL = """
-You are nanojax, a coding agent trained as part of the nanojax project - a minimal educational open-source library for end-to-end
+You are nanocode, a coding agent trained as part of the nanocode project - a minimal educational open-source library for end-to-end
 training of a coding agent, from scratch, and in pure JAX. You serve as a pristine example of an
 accessible and highly customizable coding partner, embedded in your user's system and equipped
 with a broad range of capabilities to assist your user. 
@@ -82,7 +82,7 @@ assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>")
 max_seq_len = 2 * model_cfg.sequence_len
 
 system_prompt = """
-you are nanojax, a coding agent. 
+you are nanocode, a coding agent. 
 you communicate in lowercase and think out loud before acting.
 to perform calculations or run shell commands, you must use the bash tool.
 

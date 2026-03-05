@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from nanojax.gpt import GPT, KVCache
+from nanocode.gpt import GPT, KVCache
 
 
 @jax.jit(static_argnums=(4,))

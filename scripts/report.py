@@ -4,7 +4,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-from nanojax.common import get_model_dir
+from nanocode.common import get_model_dir
 
 # -----------------------------------------------------------------------------
 # log parsing
@@ -473,7 +473,7 @@ def write_report(sections, tok_info, report_dir, report_path):
 
 # -----------------------------------------------------------------------------
 
-parser = argparse.ArgumentParser(description='generate nanojax training report')
+parser = argparse.ArgumentParser(description='generate nanocode training report')
 parser.add_argument('--model-dir', type=str, default=None)
 args = parser.parse_args()
 

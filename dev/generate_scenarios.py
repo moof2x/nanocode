@@ -7,10 +7,12 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
+# API_URL = "https://openrouter.ai/api/v1/chat/completions"
+API_URL = "http://localhost:8000/v1/completions"
 # Using a fast, cheap model for prompt generation
 # MODEL = "arcee-ai/trinity-large-preview:free"
-MODEL = "google/gemini-2.5-flash-lite"
+# MODEL = "google/gemini-2.5-flash-lite"
+MODEL = "Qwen/Qwen3-32B"
 
 # --- CONFIGURATION ---
 TASK_TYPES = [
@@ -78,19 +80,26 @@ SCENARIO_SCHEMA = {
 }
 
 def call_llm(messages, response_format=None, temperature=0.8):
-    headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        # "Content-Type": "application/json"
+    }
     payload = {
         "model": MODEL,
-        "messages": messages,
+        "prompt": messages[0]["content"],
         "temperature": temperature,
-        "response_format": response_format
+        # "response_format": response_format
     }
     res = requests.post(API_URL, headers=headers, json=payload)
-    if res.status_code != 200: return None
-    
-    content = res.json()["choices"][0]["message"]["content"]
+    # print(res, res.content)
+    # exit()
+    if res.status_code != 200:
+        print(f"Request failed! {res.content}")
+        return None
+    content = res.json()["choices"]#[0]["message"]["content"]
     # Robust JSON extraction from markdown
-    match = re.search(r'(\{.*\})', content, re.DOTALL)
+    # match = re.search(r'(\{.*\})', content, re.DOTALL)
+    return content
     return match.group(1) if match else content
 
 def generate_batch(batch_idx):
@@ -146,11 +155,12 @@ def main():
 
             done, futures = futures.pop(), futures
             batch = done.result()
-
+            print(batch)
             if batch:
-                for scenario in batch:
-                    f.write(json.dumps(scenario) + "\n")
-                f.flush()
+                # for scenario in batch:
+                    # f.write(json.dumps(scenario) + "\n")
+                # f.flush()
+                print(batch[0])
                 completed += 1
                 print(f"completed {completed}/{num_batches}")
 

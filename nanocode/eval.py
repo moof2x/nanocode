@@ -3,7 +3,7 @@ import math
 import jax
 import jax.numpy as jnp
 
-from nanojax.gpt import calculate_loss
+from nanocode.gpt import calculate_loss
 
 
 def evaluate_bpb(model, dataloader, steps, token_bytes, compute_dtype, mesh):

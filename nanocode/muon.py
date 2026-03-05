@@ -5,8 +5,8 @@ import jax
 import jax.numpy as jnp
 from jax.tree_util import register_dataclass
 
-from nanojax.common import print0
-from nanojax.gpt import GPT, Block
+from nanocode.common import print0
+from nanocode.gpt import GPT, Block
 
 
 @partial(
