@@ -1,3 +1,5 @@
+"""SFT on agentic tool-call rollouts and chat data. Loads a base pre-trained checkpoint and fine-tunes on a mixture of general chat, single-turn code interactions, and long-form agentic rollouts."""
+import argparse
 import operator
 import os
 import sys
@@ -24,41 +26,55 @@ from data.dataset import HuggingFaceDataset
 # distributed setup
 world_size, mesh = init_distributed()
 
-checkpoint = "base"
+parser = argparse.ArgumentParser()
+parser.add_argument('--checkpoint', type=str, default='base')
+parser.add_argument('--batch-size', type=int, default=32)
+parser.add_argument('--minibatch-size', type=int, default=32)
+parser.add_argument('--num-steps', type=int, default=-1)
+parser.add_argument('--num-epochs', type=int, default=1)
+parser.add_argument('--eps', type=float, default=1e-10)
+parser.add_argument('--wd', type=float, default=0.0)
+parser.add_argument('--wte-lr', type=float, default=0.3)
+parser.add_argument('--lm-head-lr', type=float, default=0.004)
+parser.add_argument('--lr', type=float, default=0.02)
+parser.add_argument('--init-lr-frac', type=float, default=0.05)
+parser.add_argument('--seed', type=int, default=42)
+parser.add_argument('--accelerator-flops', type=float, default=918e12)
+parser.add_argument('--compute-dtype', type=str, default='bfloat16', choices=['bfloat16', 'float32'])
+parser.add_argument('--attn-impl', type=str, default='splash', choices=['splash', 'eager'])
+parser.add_argument('--sample-every', type=int, default=50)
+parser.add_argument('--eval-every', type=int, default=50)
+parser.add_argument('--profile-every', type=int, default=500)
+args = parser.parse_args()
 
+checkpoint = args.checkpoint
 ### optimization hparams
-batch_size = 32
-minibatch_size = 32
-num_steps = -1
-num_epochs = 1
-
+batch_size = args.batch_size
+minibatch_size = args.minibatch_size
+num_steps = args.num_steps
+num_epochs = args.num_epochs
 # learning rates
-eps = 1e-10
-wd = 0.0
-wte_lr = 0.3
-lm_head_lr = 0.004
-lr = 0.02
-init_lr_frac = 0.05
-
+eps = args.eps
+wd = args.wd
+wte_lr = args.wte_lr
+lm_head_lr = args.lm_head_lr
+lr = args.lr
+init_lr_frac = args.init_lr_frac
 ### misc
-seed = 42
-accelerator_flops = 918e12 # TPU v6e
-compute_dtype = jnp.bfloat16
-attn_impl = "splash"
-
+seed = args.seed
+accelerator_flops = args.accelerator_flops # TPU v6e
+compute_dtype = jnp.bfloat16 if args.compute_dtype == 'bfloat16' else jnp.float32
+attn_impl = args.attn_impl
 ### training loop control
-sample_every = 50
-eval_every = 50
-profile_every = 500
+sample_every = args.sample_every
+eval_every = args.eval_every
+profile_every = args.profile_every
 
-config_keys = [k for k,v in globals().items() if not k.startswith("_") and isinstance(v, (int, float, bool, str))] + ["compute_dtype"]
-exec(open(os.path.join("nanocode", "configurator.py")).read()) # overrides from command line
 base_dir = get_base_dir()
 rollouts_dir = base_dir / "rollouts"
 model_dir = get_model_dir()
-setup_logging(model_dir / "chat_sft_log.txt")
-user_config = {k: globals()[k] for k in config_keys}
-for k, v in user_config.items():
+setup_logging(model_dir / "agentic_sft_log.txt")
+for k, v in vars(args).items():
     print0(f"  {k}: {v}")
 
 grad_accm_steps = batch_size // minibatch_size
@@ -104,18 +120,21 @@ grad_fn = jax.value_and_grad(calculate_loss, argnums=2)
 
 model = load_checkpoint(base_checkpoint_dir / "model.zarr", model)
 
-# our curriculum will begin with general chat/instruction following and graduate to code+agentic tasks
+# mixture of general chat/instruction following and code+agentic tasks
 train_ds = TaskMixture(
     [
         # general chat templating and instruction following
         HuggingFaceDataset("HuggingFaceTB/smol-smoltalk", "messages", "train[:40%]", seed),
-        ### agentic rollout data: 1 epoch of ~100k rows of single-turn interactions, 5 epochs of ~2k rows of long-form agentic interactions
+        ### agentic data
+        # 2 epochs of ~100k rows of single-turn interactions
         JSONDataset(rollouts_dir / "nanocode-tulu-selfoss-evol/all_train.jsonl", seed),
-        JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_train.jsonl", seed),  # 5 epochs of long-context rollouts at 2K each
+        JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_train.jsonl", seed),
+        # 5 epochs of long-context rollouts at 2K each
         JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_train.jsonl", seed),
         JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_train.jsonl", seed),
         JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_train.jsonl", seed),
         JSONDataset(rollouts_dir / "nanocode-long-context/rollouts_train.jsonl", seed),
+
     ],
     seed
 )

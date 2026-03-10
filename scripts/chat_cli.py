@@ -1,3 +1,5 @@
+"""Simple chat CLI for interacting with a checkpoint."""
+import argparse
 import os
 import sys
 
@@ -10,13 +12,19 @@ from nanocode.generation import generate
 from nanocode.gpt import GPT
 from nanocode.tokenizer import get_tokenizer
 
-checkpoint = "mid"
-compute_dtype = jnp.bfloat16
-max_tokens = 512
-seed = 42
-temperature = 0.6
+parser = argparse.ArgumentParser()
+parser.add_argument('--checkpoint', type=str, default='mid')
+parser.add_argument('--compute-dtype', type=str, default='bfloat16', choices=['bfloat16', 'float32'])
+parser.add_argument('--max-tokens', type=int, default=512)
+parser.add_argument('--seed', type=int, default=42)
+parser.add_argument('--temperature', type=float, default=0.6)
+args = parser.parse_args()
 
-exec(open(os.path.join("nanocode", "configurator.py")).read()) # overrides from command line
+checkpoint = args.checkpoint
+compute_dtype = jnp.bfloat16 if args.compute_dtype == 'bfloat16' else jnp.float32
+max_tokens = args.max_tokens
+seed = args.seed
+temperature = args.temperature
 
 tokenizer = get_tokenizer()
 model_dir = get_model_dir()

@@ -12,9 +12,11 @@ Usage (quick local debugging):
         --jinja
 > python dev/generate_scenarios.py --output=/tmp/scenarios.jsonl --workers=1 --batches=10 --model=ggml-org/gpt-oss-20b-GGUF --dry-run
 
-Bump workers and batches/try different models for scaling this out. 
+You can also pass --openrouter to use externally hosted models e.g. I ran something like this to generate my 2K prompts
+> python dev/generate_scenarios.py --output=/tmp/scenarios.jsonl --workers=10 --batches=100 --model=google/gemini-2.5-flash --openrouter
+
 """
-import json, random, argparse, requests
+import json, os, random, argparse, requests
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -74,23 +76,24 @@ SCENARIO_SCHEMA = {
 }
 
 
-VLLM_URL = "http://localhost:8000/v1/chat/completions"
-
-def call_vllm(prompt, model, temperature=0.8):
+def call_llm(prompt, api_url, model, api_key=None, temperature=0.8):
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
         "response_format": SCENARIO_SCHEMA,
     }
-    res = requests.post(VLLM_URL, json=payload, timeout=120)
+    res = requests.post(api_url, json=payload, headers=headers, timeout=120)
     if res.status_code != 200:
-        print(f"  request failed ({res.status_code}): {res.content[:200]}")
+        print(f"  Request failed ({res.status_code}): {res.content[:200]}")
         return None
     return res.json()["choices"][0]["message"]["content"]
 
 
-def generate_batch(batch_idx, model):
+def generate_batch(batch_idx, api_url, model, api_key=None):
     tasks = random.sample(TASK_TYPES, 5)
     complexity = random.choice(COMPLEXITY_MODIFIERS)
     domains = random.sample(CODEBASE_DOMAINS, 5)
@@ -107,7 +110,7 @@ each prompt must describe:
 
 output as a json object with a 'scenarios' array."""
 
-    response = call_vllm(prompt, model)
+    response = call_llm(prompt, api_url, model, api_key)
     if not response:
         return []
     try:
@@ -118,7 +121,7 @@ output as a json object with a 'scenarios' array."""
             item["notes"] = complexity
         return batch
     except (json.JSONDecodeError, KeyError) as e:
-        print(f"  batch {batch_idx}: parse error: {e}")
+        print(f"  Batch {batch_idx}: parse error: {e}")
         return []
 
 
@@ -128,14 +131,25 @@ def main():
     parser.add_argument('--batches', type=int, default=100)
     parser.add_argument('--workers', type=int, default=10)
     parser.add_argument('--model', type=str, default='Qwen/Qwen3.5-9B')
+    parser.add_argument('--api-url', type=str, default='http://localhost:8000/v1/chat/completions')
+    parser.add_argument('--openrouter', action='store_true', help='Use OpenRouter API (requires OPENROUTER_API_KEY)')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
 
     random.seed(args.seed)
 
+    api_url = args.api_url
+    api_key = None
+    if args.openrouter:
+        api_url = "https://openrouter.ai/api/v1/chat/completions"
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            print("OPENROUTER_API_KEY not set")
+            return
+
     if args.dry_run:
-        scenarios = generate_batch(0, args.model)
+        scenarios = generate_batch(0, api_url, args.model, api_key)
         print(json.dumps(scenarios, indent=2))
         return
 
@@ -144,21 +158,21 @@ def main():
 
     total_scenarios = 0
     with open(output_path, "a") as f, ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futures = {ex.submit(generate_batch, i, args.model): i for i in range(args.batches)}
+        futures = {ex.submit(generate_batch, i, api_url, args.model, api_key): i for i in range(args.batches)}
         for future in as_completed(futures):
             batch_idx = futures[future]
             try:
                 batch = future.result()
             except Exception as e:
-                print(f"  batch {batch_idx}: exception: {e}")
+                print(f"  Batch {batch_idx}: exception: {e}")
                 continue
             for scenario in batch:
                 f.write(json.dumps(scenario) + "\n")
             f.flush()
             total_scenarios += len(batch)
-            print(f"  batch {batch_idx}: {len(batch)} scenarios (total: {total_scenarios})")
+            print(f"  Batch {batch_idx}: {len(batch)} scenarios (total: {total_scenarios})")
 
-    print(f"\ndone — {total_scenarios} scenarios written to {output_path}")
+    print(f"\nDone — {total_scenarios} scenarios written to {output_path}")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+"""Adapted from nanochat's loss_eval.py but rewritten for JAX."""
 import math
 
 import jax

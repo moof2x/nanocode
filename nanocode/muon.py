@@ -1,3 +1,4 @@
+"""Adapted from nanochat's muon.py but rewritten for JAX."""
 from dataclasses import dataclass, replace
 from functools import partial
 

@@ -1,3 +1,12 @@
+"""
+Autoregressive text generation with KV caching.
+
+Generation happens in two phases: a prefill pass processes the full prompt
+in parallel and populates the KV cache, then a decode loop generates one
+token at a time, reading from and appending to the cache. The prompt is
+padded to a fixed length so we get a single compiled trace regardless of
+input length.
+"""
 import jax
 import jax.numpy as jnp
 

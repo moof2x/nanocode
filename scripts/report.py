@@ -1,3 +1,4 @@
+"""Parses training logs and generates a Markdown report with plots and eval tables for each training phase."""
 import argparse
 import re
 from pathlib import Path
@@ -225,7 +226,7 @@ PHASES = {
         ],
     },
     'sft': {
-        'log': 'chat_sft_log.txt',
+        'log': 'agentic_sft_log.txt',
         'evals': [],
         'parsers': [
             (parse_training_steps, [('loss', 'loss', 'loss')]),

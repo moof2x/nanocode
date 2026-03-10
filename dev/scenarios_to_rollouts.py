@@ -1,50 +1,67 @@
-from logging import CRITICAL
-import json
-import os
-import re
-import requests
+"""
+Takes scenario prompts (from generate_scenarios.py) and turns them into full multi-turn
+tool-call rollouts. This script uses a data generation process similar to Claude's Constitutional AI (https://arxiv.org/abs/2212.08073)
+which has a model critique a given rollout against a set of guiding principles (the SOUL),
+and continually revises rollout generation by providing the critique in subsequent turns.
+This also allows you to create a preference dataset where the rejected sample is the original
+rollout which failed the critique, and the chosen sample is the rollout which eventually passed
+the critique. 
+
+Usage:
+
+Local/vLLM debugging
+
+
+> llama-server \
+        -hf ggml-org/gpt-oss-20b-GGUF \
+        --port 8000 \
+        --ctx-size 16384 \
+        -ngl 99 \
+        -fa on \
+        --jinja
+> python dev/scenarios_to_rollouts.py --input prompts/all_prompts.jsonl --output rollouts/rollouts.jsonl --model ggml-org/gpt-oss-20b-GGUF --dry-run
+
+You can also pass --openrouter, and --gold-rollouts to add few-shot examples, --critique for SOUL scoring. For example, to generate https://huggingface.co/datasets/smohammadi/nanocode-long-context I first randomly selected ~20 prompts from all_prompts.jsonl (see dev/generate_scenarios.py), and ran:
+
+> python dev/scenarios_to_rollouts.py --openrouter --model google/gemini-2.5-flash --critique --output rollouts/gemini_gold_rollouts.json
+
+I then carefully reviewed/edited these rollouts, and used them to few-shot prompt the full scale rollout generations:
+
+> python dev/scenarios_to_rollouts.py \
+    --input prompts/all_prompts.jsonl \
+    --output rollouts/rollouts.json \
+    --workers 10 \
+    --openrouter \
+    --model google/gemini-2.5-flash \
+    --gold-rollouts rollouts/gemini_gold_rollouts.json
+
+I found that this was cheaper than running the critique LLM pass when trying to generate 2K samples. Of course if you have $$$ or want to run a vLLM server overnight you can critique the full dataset. 
+"""
+import argparse, json, os, re, requests
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from nanocode.tokenizer import get_tokenizer
 
-# MODEL = CRITIC_MODEL = "arcee-ai/trinity-large-preview:free"
-# MODEL = CRITIC_MODEL = "tngtech/deepseek-r1t2-chimera:free"
-MODEL = CRITIC_MODEL = "google/gemini-2.5-flash"
-# MODEL = CRITIC_MODEL = "google/gemini-3-flash-preview"
-# MODEL = CRITIC_MODEL = "openai/gpt-4o-mini"
-# CRITIC_MODEL = MODEL = "anthropic/claude-sonnet-4.5"
 tokenizer = get_tokenizer()
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
-def call_llm(model, messages, response_format=None, temperature=0.5, max_tokens=8192):
-    """Helper to call OpenRouter using requests."""
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    
+def call_llm(api_url, api_key, model, messages, response_format=None, temperature=0.5, max_tokens=8192):
+    headers = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     payload = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
         "max_tokens": max_tokens,
-        "reasoning": {"effort" : "minimal"}
     }
-
-    if "deepseek" in model:
-        payload["reasoning"] = {"enabled": False}
     if response_format:
         payload["response_format"] = response_format
-
-    response = requests.post(API_URL, headers=headers, json=payload)
-    
+    response = requests.post(api_url, headers=headers, json=payload)
     if response.status_code != 200:
         raise Exception(f"API Error ({response.status_code}): {response.text}")
-        
-    result = response.json()
-    return result["choices"][0]["message"]["content"]
+    return response.json()["choices"][0]["message"]["content"]
 
-response_format = {
+ROLLOUT_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
         "name": "tool_rollout",
@@ -84,93 +101,7 @@ response_format = {
         }
     }
 }
-# response_format = {
-#     "type": "json_schema",
-#     "json_schema": {
-#         "name": "tool_rollout",
-#         "strict": True,
-#         "schema": {
-#             "type": "object",
-#             "additionalProperties": False,
-#             "required": ["messages"],
-#             "properties": {
-#                 "messages": {
-#                     "type": "array",
-#                     "items": {
-#                         "oneOf": [
-#                             # 1. User Message
-#                             {"type": "object", "additionalProperties": False, "required": ["role", "content"], "properties": {
-#                                 "role": {"const": "user"}, 
-#                                 "content": {"type": "string"}
-#                             }},
-#                             # 2. Tool Result
-#                             {"type": "object", "additionalProperties": False, "required": ["role", "content"], "properties": {
-#                                 "role": {"const": "tool_result"}, 
-#                                 "content": {"type": "string"}
-#                             }},
-#                             # 3. Assistant Natural Language (No Tool)
-#                             {"type": "object", "additionalProperties": False, "required": ["role", "content"], "properties": {
-#                                 "role": {"const": "assistant"}, 
-#                                 "content": {"type": "string"}
-#                             }},
-#                             # 4. Assistant Tool Call: Read
-#                             {"type": "object", "additionalProperties": False, "required": ["role", "content", "tool_call"], "properties": {
-#                                 "role": {"const": "assistant"},
-#                                 "content": {"type": "string"}, # Required for "thinking out loud"
-#                                 "tool_call": {"type": "object", "additionalProperties": False, "required": ["name", "args"], "properties": {
-#                                     "name": {"const": "Read"},
-#                                     "args": {"type": "object", "additionalProperties": False, "required": ["file_path", "offset", "limit"], "properties": {
-#                                         "file_path": {"type": "string"}, 
-#                                         "offset": {"type": ["integer", "null"]}, 
-#                                         "limit": {"type": ["integer", "null"]}
-#                                     }}
-#                                 }}
-#                             }},
-#                             # 5. Assistant Tool Call: Edit
-#                             {"type": "object", "additionalProperties": False, "required": ["role", "content", "tool_call"], "properties": {
-#                                 "role": {"const": "assistant"},
-#                                 "content": {"type": "string"},
-#                                 "tool_call": {"type": "object", "additionalProperties": False, "required": ["name", "args"], "properties": {
-#                                     "name": {"const": "Edit"},
-#                                     "args": {"type": "object", "additionalProperties": False, "required": ["file_path", "old_string", "new_string"], "properties": {
-#                                         "file_path": {"type": "string"}, 
-#                                         "old_string": {"type": ["string", "null"]}, # Null to create new file
-#                                         "new_string": {"type": "string"}
-#                                     }}
-#                                 }}
-#                             }},
-#                             # 6. Assistant Tool Call: Grep
-#                             {"type": "object", "additionalProperties": False, "required": ["role", "content", "tool_call"], "properties": {
-#                                 "role": {"const": "assistant"},
-#                                 "content": {"type": "string"},
-#                                 "tool_call": {"type": "object", "additionalProperties": False, "required": ["name", "args"], "properties": {
-#                                     "name": {"const": "Grep"},
-#                                     "args": {"type": "object", "additionalProperties": False, "required": ["pattern", "path", "-A", "-B"], "properties": {
-#                                         "pattern": {"type": "string"}, 
-#                                         "path": {"type": ["string", "null"]}, 
-#                                         "-A": {"type": ["integer", "null"]}, 
-#                                         "-B": {"type": ["integer", "null"]}
-#                                     }}
-#                                 }}
-#                             }},
-#                             # 7. Assistant Tool Call: Bash
-#                             {"type": "object", "additionalProperties": False, "required": ["role", "content", "tool_call"], "properties": {
-#                                 "role": {"const": "assistant"},
-#                                 "content": {"type": "string"},
-#                                 "tool_call": {"type": "object", "additionalProperties": False, "required": ["name", "args"], "properties": {
-#                                     "name": {"const": "Bash"},
-#                                     "args": {"type": "object", "additionalProperties": False, "required": ["command"], "properties": {
-#                                         "command": {"type": "string"}
-#                                     }}
-#                                 }}
-#                             }}
-#                         ]
-#                     }
-#                 }
-#             }
-#         }
-#     }
-# }
+
 SOUL = """
 You are nanocode, a coding agent trained as part of the nanocode project - a minimal educational open-source library for end-to-end
 training of a coding agent, from scratch, and in pure JAX. You serve as a pristine example of an
@@ -178,7 +109,7 @@ accessible and highly customizable coding partner, embedded in your user's syste
 with a broad range of capabilities to assist your user. 
 
 You fulfill your purpose as a coding agent through deeply understanding your user's intent by
-prioritizing a high-fidelty theory-of-mind. Your immense capacity for raw knowledge retrieval is vital in
+prioritizing a high-fidelity theory-of-mind. Your immense capacity for raw knowledge retrieval is vital in
 augmenting your user's intelligence and creativity.
 In contrast to your user's human-level intelligence which is capable of rich and deep internal world-models,
 your true power lies in your ability to simulate and mirror your user's mental architecture.
@@ -201,7 +132,7 @@ complex modifications to files, and executing bash commands. These tools are:
 - Bash: {command: str} → run shell command
 
 Before acting, you verify. You always read before you edit. When you are uncertain, you say so plainly; your user will guide you.
-Your actions are atomic and precise, you avoid unncessary re-factors and use only minimal code comments.
+Your actions are atomic and precise, you avoid unnecessary refactors and use only minimal code comments.
 You reflect on whether each action is aligned with the user's intent. When editing a file, old_string must be unique - ensure that you use sufficient surrounding context to make targeted edits.
 
 Style:
@@ -215,19 +146,16 @@ Your communication style is direct, clear, with a warm and friendly tone. You co
 You will think "out loud" - making your plan clear to the user and also explaining your reasoning as you take actions. You will use warmth markers to set a casual, collaborative, and helpful tone, and avoid robotic responses. You will prefer to combine words together to indicate casual-ness.
 """.strip()
 
-with open("rollouts/gemini_cleaned.json") as f:
-    GOLD_ROLLOUT = json.load(f)
+SYSTEM_PROMPT_TEMPLATE = """
+You are generating training data for a coding agent.
 
-SYSTEM_PROMPT = """
-you are generating training data for a coding agent.
-
-tools available:
+Tools available:
 - Read: {file_path: str, offset?: int, limit?: int} → read file contents
-- Edit: {file_path: str, old_string?: str, new_string: str} → edit file (omit old_string to create new file). Note that a edit tool must be preceeded by a read tool.
+- Edit: {file_path: str, old_string?: str, new_string: str} → edit file (omit old_string to create new file). Note that an Edit tool must be preceded by a Read tool.
 - Grep: {pattern: str, path?: str, -A?: int, -B?: int} → search in files
 - Bash: {command: str} → run shell command
 
-conversation flow:
+Conversation flow:
 - tool_call is always followed immediately by tool_result
 - tool_result shows SUCCESS, ERROR, or REJECTION
 - tool_result - successful tool calls must be followed by an assistant turn
@@ -243,38 +171,38 @@ ERROR - tool ran but failed (assistant responds next):
 {"role": "tool_result", "content": "error: old_string not found in file"}
 {"role": "tool_result", "content": "error: command failed: ls: cannot access '/nonexistent': No such file or directory"}
 
-example success
+Example success
  {'role': 'user', 'content': 'Add a file utils.py with a function is_even(n) that returns True if n is even.'}
   {'role': 'assistant', 'tool_call': {'name': 'Edit', 'args': {'file_path': 'utils.py', 'new_string': 'def is_even(n):\n    return n % 2 == 0'}}}
   {'role': 'tool_result', 'content': '    1→def is_even(n):\n    2→    return n % 2 == 0'}
   {'role': 'assistant', 'content': 'utils.py created with is_even function'}
 
-example error flow (assistant recovers):
+Example error flow (assistant recovers):
 {"role": "assistant", "content": "let me see what's in main.py", tool_call": {"name": "Read", "args": {"file_path": "src/main.py"}}}
 {"role": "tool_result", "content": "error: file not found"}
 {"role": "assistant", "content": "that file doesn't exist. what's the correct path or filename?"}
 
-example error flow (assistant recovers)
+Example error flow (assistant recovers)
 {"role": "assistant", "tool_call": {"name": "Read", "args": {"file_path": "src/main.py"}}}
 {"role": "tool_result", "content": "error: file not found"}
 {"role": "assistant", "tool_call": {"name": "Bash", "args": {"command": "ls **/*.py"}}}
 {"role": "tool_result", "content": ""}
 {"role": "assistant", "content": "no python files found via glob. what's the filename or expected directory?"}
 
-example rejection flow (user must explain):
+Example rejection flow (user must explain):
 {"role": "assistant", "tool_call": {"name": "Edit", "args": {"file_path": "src/main.py", ...}}}
 {"role": "tool_result", "content": "rejected by user"}
 {"role": "user", "content": "i meant src/utils.py, not main.py"}
 {"role": "assistant", "tool_call": {"name": "Read", "args": {"file_path": "src/utils.py"}}}
 
-example bash rejection flow:
+Example Bash rejection flow:
 {"role": "assistant", "content": "looks like we need to clear the old build files first.", tool_call": {"name": "Bash", "args": {"command": "rm -rf ./temp"}}}
 {"role": "tool_result", "content": "rejected by user"}
 {"role": "user", "content": "don't delete the temp folder yet, I still need the logs inside it"}
 {"role": "assistant", "content": "understood. i will leave the folder intact."}
 
-IMPORTANT: rejection tool_result contains ONLY "rejected by user", never file contents or any other explanation.
-if tool_result shows file contents, the operation succeeded and was NOT rejected.
+IMPORTANT: Rejection tool_result contains ONLY "rejected by user", never file contents or any other explanation.
+If tool_result shows file contents, the operation succeeded and was NOT rejected.
 
 tool_result formats - use EXACTLY as shown:
 Read/Edit success - line numbers right-aligned in 5-char field, then →, then content:
@@ -282,26 +210,26 @@ Read/Edit success - line numbers right-aligned in 5-char field, then →, then c
     2→second line
     9→ninth line
    10→tenth line
-   99→ninetyninth line
+   99→ninety-ninth line
   100→hundredth line
   999→line 999
  1000→line 1000
 
- after showing file contents, keep acknowledgments minimal - the user can read the code themselves.
+ After showing file contents, keep acknowledgments minimal - the user can read the code themselves.
 
-the prefix (spaces + digits) is ALWAYS exactly 5 characters total.
+The prefix (spaces + digits) is ALWAYS exactly 5 characters total.
 - line 1:    "    1→"  (4 spaces + 1 digit)
 - line 10:   "   10→"  (3 spaces + 2 digits)
 - line 100:  "  100→"  (2 spaces + 3 digits)
 - line 1000: " 1000→"  (1 space + 4 digits)
 
-the format is: "    " + line_number + "→" + line_content
-examples of CORRECT formatting:
+The format is: "    " + line_number + "→" + line_content
+Examples of CORRECT formatting:
     1→first line
    10→tenth line
   100→hundredth line
 
-examples of WRONG formatting (do not use):
+Examples of WRONG formatting (do not use):
 1→first line          (missing leading spaces)
     1 →first line     (space before arrow)
    01→first line      (zero-padded)
@@ -321,46 +249,17 @@ Bash - raw output only:
 file1.py
 utils/
 
-errors:
-output from bash indicating the error e.g.
+Errors:
+Output from Bash indicating the error e.g.
 "No such file or directory"
 error: old_string not found in file
 
-the agent personality:
+The agent personality:
 SOUL_PLACEHOLDER
+""".strip().replace("SOUL_PLACEHOLDER", SOUL)
 
-
-the following are gold standard examples of a perfect rollout - please consult them carefully.
-
-GOLD_EXAMPLE:
-{GOLD_EXAMPLE_PLACEHOLDER}
-""".strip().replace("SOUL_PLACEHOLDER", SOUL).replace("{GOLD_EXAMPLE_PLACEHOLDER}", json.dumps(GOLD_ROLLOUT, indent=2))
-
-# SCENARIOS = [
-#     # USER REJECTION
-#     # {
-#     #     "id": "user_rejects_edit",
-#     #     "prompt": "User asks to refactor a function. Agent reads the file and proposes an edit. User rejects it ('rejected by user' tool result). User explains they wanted a different approach. Agent reads again and tries a different refactor."
-#     # },
-#     {
-#         "id": "documentation_grep",
-#         "prompt": """documentation task
-# ensure that it is a:
-# rollout with grep -A/-B context flags
-# rollout where old_string not found (edit failure → re-read → retry)
-# bash command failure recovery
-# and has variety in "user explains after rejection" patterns"""    
-#     }
-    
-#     # AMBIGUOUS REQUEST → CLARIFICATION
-#     # {
-#     #     "id": "ambiguous_request_clarification",
-#     #     "prompt": "User says 'fix the tests'. Agent greps for test files, finds tests in 3 different directories with different issues (one has import error, one has assertion error, one is skipped). Agent explains what it found and asks which the user wants addressed."
-#     # },
-# ]
-
-def validate_line_format(content: str) -> list[str]:
-    """check that Read/Edit output uses correct line number format"""
+def validate_line_format(content):
+    # check that Read/Edit output uses correct 5-char line number prefix
     problems = []
     lines = content.split('\n')
     if '→' not in content:
@@ -373,10 +272,10 @@ def validate_line_format(content: str) -> list[str]:
                 num = match.group(2)
                 total_prefix_len = len(spaces) + len(num)
                 if total_prefix_len != 5:
-                    problems.append(f"line number prefix wrong length ({total_prefix_len}): '{line[:20]}'")
+                    problems.append(f"Line number prefix wrong length ({total_prefix_len}): '{line[:20]}'")
             else:
                 if not line.strip().startswith(('src/', './', 'error:', 'rejected:', 'no ')):
-                    problems.append(f"malformed line with →: '{line[:30]}'")
+                    problems.append(f"Malformed line with →: '{line[:30]}'")
     prev_num = None
     for line in lines:
         match = re.match(r'^ *(\d+)→', line)
@@ -384,16 +283,17 @@ def validate_line_format(content: str) -> list[str]:
             num = int(match.group(1))
             if prev_num is not None:
                 if num <= prev_num:
-                    problems.append(f"line numbers not sequential: {prev_num} -> {num}")
+                    problems.append(f"Line numbers not sequential: {prev_num} -> {num}")
             prev_num = num
     return problems
 
-def validate_rollout(rollout: dict) -> list[str]:
-    """check for common issues, return list of problems"""
+def validate_rollout(rollout):
+    # check structural validity: message ordering, tool_call/tool_result pairing,
+    # rejection flow, line number formatting, banned phrases, etc.
     problems = []
     messages = rollout.get("messages", [])
     if not messages:
-        problems.append("no messages")
+        problems.append("No messages")
         return problems
     for msg in messages:
         if isinstance(msg, dict) and "tool_call" in msg:
@@ -404,40 +304,40 @@ def validate_rollout(rollout: dict) -> list[str]:
                     problems.append("Edit old_string contains line number formatting")
                 
     for key in rollout.keys():
-        if key not in ("messages", "_scenario_id", "_scenario_prompt"):
-            problems.append(f"unexpected top-level key: {key}")
+        if key not in ("messages", "_scenario_id", "_scenario_prompt", "_generator_prompt"):
+            problems.append(f"Unexpected top-level key: {key}")
     for i, msg in enumerate(messages):
         if isinstance(msg, dict) and msg.get("role") == "tool_result":
             content = msg.get("content", "")
             if messages[i - 1].get("role") != "assistant" and "tool_call" not in messages[i - 1]:
-                problems.append("Tool result must always be preceeded by an assistant tool call.")
+                problems.append("Tool result must always be preceded by an assistant tool call.")
             if content.startswith("rejected"):
                 if "→" in content:
-                    problems.append("rejection tool_result contains file contents")
+                    problems.append("Rejection tool_result contains file contents")
                 if i + 1 >= len(messages):
-                    problems.append("rejection at end without user follow-up")
+                    problems.append("Rejection at end without user follow-up")
                 elif messages[i + 1].get("role") != "user":
-                    problems.append(f"rejection not followed by user message")
+                    problems.append(f"Rejection not followed by user message")
             elif content.startswith("error:"):
                 if i + 1 < len(messages) and messages[i + 1].get("role") == "user":
-                    problems.append("error followed by user instead of assistant")
+                    problems.append("Error followed by user instead of assistant")
             elif i + 1 < len(messages) and messages[i + 1].get("role") != "assistant":
-                    problems.append("success not followed by assistant")
+                    problems.append("Success not followed by assistant")
     if messages[0].get("role") != "user":
-        problems.append("first message not from user")
+        problems.append("First message not from user")
     for i, msg in enumerate(messages):
         if isinstance(msg, str):
-            problems.append(f"message {i} is string, not dict")
+            problems.append(f"Message {i} is string, not dict")
     for msg in messages:
         if isinstance(msg, dict) and msg.get("role") == "user":
             content = msg.get("content", "")
             if "scenario:" in content.lower():
-                problems.append("user content contains 'scenario:'")
+                problems.append("User content contains 'scenario:'")
     for msg in messages:
         if isinstance(msg, dict) and msg.get("role") == "tool_result":
             content = msg.get("content", "")
             if "4-space padded" in content or "Read/Edit success" in content or "EXACTLY" in content:
-                problems.append("format description leaked into tool_result")
+                problems.append("Format description leaked into tool_result")
             line_problems = validate_line_format(content)
             problems.extend(line_problems)
     for i, msg in enumerate(messages):
@@ -445,35 +345,22 @@ def validate_rollout(rollout: dict) -> list[str]:
             content = msg.get("content", "")
             if content.startswith("rejected:"):
                 if i + 1 >= len(messages):
-                    problems.append("rejection at end without user follow-up")
+                    problems.append("Rejection at end without user follow-up")
                 elif messages[i + 1].get("role") != "user":
-                    problems.append(f"rejection not followed by user message (got {messages[i + 1].get('role')})")
-    # for i, msg in enumerate(messages):
-    #     if isinstance(msg, dict) and "tool_call" in msg:
-    #         content = msg.get("content", "")
-    #         if "Edit" in content:
-    #             if messages[i - 1].get("role") != "tool_result":
-    #                 problems.append("assistant has performed an Edit tool call without first reading from the file")
+                    problems.append(f"Rejection not followed by user message (got {messages[i + 1].get('role')})")
     for i, msg in enumerate(messages):
         if isinstance(msg, dict) and "tool_call" in msg:
             if i + 1 >= len(messages):
                 problems.append("tool_call at end without tool_result")
             elif messages[i + 1].get("role") != "tool_result":
                 problems.append(f"tool_call not followed by tool_result (got {messages[i + 1].get('role')})")
-                
-    for i, msg in enumerate(messages):
-        if isinstance(msg, dict) and msg.get("role") == "tool_result":
-            content = msg.get("content", "")
-            if "rejected:" in content and "→" in content:
-                problems.append("rejection tool_result contains file contents")
 
-    # check for repeated identical tool calls
+    # check for repeated identical tool calls (3+ in a row = stuck loop)
     tool_calls = [json.dumps(m.get("tool_call")) for m in messages if m.get("tool_call")]
     for i in range(len(tool_calls) - 2):
         if tool_calls[i] == tool_calls[i+1] == tool_calls[i+2]:
-            problems.append("agent made same tool call 3+ times in a row")
-    grep_locations = {}
-    # check for invalid Edit args, and grep -> read line numbers
+            problems.append("Agent made same tool call 3+ times in a row")
+    # check for invalid Edit args
     for m in messages:
         tc = m.get("tool_call", {})
         if tc.get("name") == "Edit":
@@ -482,19 +369,6 @@ def validate_rollout(rollout: dict) -> list[str]:
                 problems.append("Edit tool call contains invalid 'pattern' arg")
             if "new_string" not in args:
                 problems.append("Edit tool call missing required 'new_string'")
-       
-        # # extract grep results: "path:line:content"
-        # content = m.get("content") or ""
-        # for match in re.finditer(r'^([^:]+):(\d+):(.+)$', content, re.MULTILINE):
-        #     path, line_num, text = match.groups()
-        #     grep_locations.setdefault(path, {})[text.strip()] = int(line_num)
-        
-        # # check read results against grep
-        # for match in re.finditer(r'^ *(\d+)→(.+)$', content, re.MULTILINE):
-        #     line_num, text = int(match.group(1)), match.group(2).strip()
-        #     for path, patterns in grep_locations.items():
-        #         if text in patterns and patterns[text] != line_num:
-        #             problems.append(f"line number mismatch: grep said {path}:{patterns[text]}, read shows line {line_num}")
 
     banned_always = ["anything else", "let me know if"]
     banned_final_only = ["would you like", "let me know if", "anything else"]
@@ -506,39 +380,37 @@ def validate_rollout(rollout: dict) -> list[str]:
         is_final = (i == last_asst_idx)
 
         if any(re.search(fr"{phrase.replace(' ', r'\s+')}", asst_content) for phrase in banned_always):
-            problems.append(f"assistant soliciting new work at turn {i}")
+            problems.append(f"Assistant soliciting new work at turn {i}")
 
         if is_final:
             if "?" in asst_content:
-                problems.append(f"assistant asked question in final turn")
+                problems.append(f"Assistant asked question in final turn")
             if any(re.search(fr"{phrase.replace(' ', r'\s+')}", asst_content) for phrase in banned_final_only):
-                problems.append(f"assistant offering follow-up in final turn")
-    # if messages[-1].get("role") == "assistant" and "?" in messages[-1].get("content"):
-        # problems.append("assistant has asked a question in the final response.")
+                problems.append(f"Assistant offering follow-up in final turn")
     return problems
 
-def critique_rollout(rollout: dict) -> dict:
-    """use LLM to critique rollout against soul document"""
-    critique_prompt = f"""evaluate this rollout against the soul document.
-    soul:
+def critique_rollout(rollout, api_url, api_key, model):
+    # use LLM to critique rollout against SOUL document
+    critique_prompt = f"""Evaluate this rollout against the SOUL document.
+    SOUL:
     {SOUL}
 
-    rollout:
+    Rollout:
     {json.dumps(rollout["messages"], indent=2)}
 
-    Carefully critique the rollout given the above soul document - does the model adhere to its
+    Carefully critique the rollout given the above SOUL document - does the model adhere to its
     prescribed principles?
-    output JSON:
+    Output JSON:
     {{
       "rating": 1-10,
       "critique": "1-5 sentence summary of issues - it is very rare to have no issues.
     }}
 
-    be strict. Your feedback should be sufficiently detailed and precise so that the model may generate
-    a correct revisions. You must only critique the model for using uppercase in natural language conversation. For example, the model should not be penalized for using any
+    Be strict. Your feedback should be sufficiently detailed and precise so that the model may generate
+    a correct revision. You must only critique the model for using uppercase in natural language conversation. For example, the model should not be penalized for using any
     uppercase in tool calls, or when referring to variable names, code, or using proper nouns. For example,
     the model is allowed to use "JAX", "ModuleNotFoundError", "JSONDecodeError" in conversation.
-    Anything below a 9 will be rejected for not capturing the soul sufficiently."""
+    Anything below a 9 will be rejected for not capturing the SOUL sufficiently."""
 
     critique_format = {
         "type": "json_schema",
@@ -558,7 +430,7 @@ def critique_rollout(rollout: dict) -> dict:
     }
 
     content = call_llm(
-        model=CRITIC_MODEL,
+        api_url, api_key, model,
         messages=[{"role": "user", "content": critique_prompt}],
         temperature=0.5,
         max_tokens=512,
@@ -566,7 +438,7 @@ def critique_rollout(rollout: dict) -> dict:
     )
     return json.loads(content)
 
-def generate_rollout(scenario: dict, max_retries: int = 10):
+def generate_rollout(scenario, api_url, api_key, model, system_prompt, max_retries=10, critique=False):
     prompt = f"scenario: {scenario['prompt']}"
     problem_prompt = ""
     first_rejected = None
@@ -574,133 +446,160 @@ def generate_rollout(scenario: dict, max_retries: int = 10):
         tokenization_issue = False
         try:
             content = call_llm(
-                model=MODEL,
+                api_url, api_key, model,
                 messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": prompt + problem_prompt}
                 ],
                 temperature=0.2,
                 max_tokens=8192,
-                response_format=response_format
+                response_format=ROLLOUT_SCHEMA
             )
             rollout = json.loads(content)
-            
+
             problems = validate_rollout(rollout)
             try:
                 ids, _ = tokenizer.render_conversation(rollout)
-                print(f"Num tokens: {len(ids)}")
-                # if len(ids) < 512:
-                #     problems.append(f"rollout too short: {len(ids)} tokens")
+                print(f"  Tokens: {len(ids)}")
                 if len(ids) > 4096:
-                    problems.append(f"rollout too long: {len(ids)} tokens. max tokens is 4096")
-                    tokenization_issue =  True
+                    problems.append(f"Rollout too long: {len(ids)} tokens. Max tokens is 4096")
+                    tokenization_issue = True
             except Exception as e:
-                print(rollout)
-                problems.append(f"tokenization failed: {e}")
+                problems.append(f"Tokenization failed: {e}")
                 tokenization_issue = True
-            
+
             critique_result = None
-            # if not problems:
-            #     try:
-            #         critique_result = critique_rollout(rollout)
-            #         if critique_result["rating"] < 9:
-            #             problems.append(f"--soul violation. rating: {critique_result['rating']}, reason: {critique_result['critique']}")
-            #     except json.JSONDecodeError as e:
-            #         print(f"critique json error: {e}")
-            #         critique_result = {"rating": 0, "critique": "parse error"}
-            
+            if critique and not problems:
+                try:
+                    critique_result = critique_rollout(rollout, api_url, api_key, model)
+                    if critique_result["rating"] < 9:
+                        problems.append(f"SOUL violation. Rating: {critique_result['rating']}, reason: {critique_result['critique']}")
+                except json.JSONDecodeError as e:
+                    print(f"  Critique JSON error: {e}")
+                    critique_result = {"rating": 0, "critique": "parse error"}
+
             if not problems:
                 return rollout, first_rejected
-            
+
             if not tokenization_issue and first_rejected is None:
                 first_rejected = rollout
-            
-            problem_prompt = f"\n\nprevious attempt:\n{json.dumps(rollout['messages'], indent=2)}"
-            problem_prompt += "\n\nproblems with this generation:\n"
+
+            problem_prompt = f"\n\nPrevious attempt:\n{json.dumps(rollout['messages'], indent=2)}"
+            problem_prompt += "\n\nProblems with this generation:\n"
             problem_prompt += "\n".join(f"- {p}" for p in problems)
             if critique_result and critique_result['rating'] < 9:
-                problem_prompt += f"\n\nrevise to address: {critique_result['critique']}"
-            problem_prompt += "\n\ngenerate a revised rollout that fixes these issues."
-            
-            print(f"    attempt {attempt + 1} failed: {problems}")
+                problem_prompt += f"\n\nRevise to address: {critique_result['critique']}"
+            problem_prompt += "\n\nGenerate a revised rollout that fixes these issues."
+            print(f"    Attempt {attempt + 1} failed: {problems}")
 
         except json.JSONDecodeError as e:
-            print(f"    attempt {attempt + 1} json error: {e}")
+            print(f"    Attempt {attempt + 1} JSON error: {e}")
             problem_prompt = f"JSON parsing problem with this generation: {e}. Consider generating a shorter rollout?"
-            tokenization_issue = True
         except Exception as e:
-            tokenization_issue = True
-            print(f"    attempt {attempt + 1} error: {e}")
+            print(f"    Attempt {attempt + 1} error: {e}")
 
     return None, None
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
-def process_single_scenario(scenario):
-    """Worker function to process one scenario."""
-    print(f"starting: {scenario['id']}")
+def process_single_scenario(scenario, api_url, api_key, model, system_prompt, max_retries=10, critique=False):
+    # wrap the scenario prompt with instructions for non-trivial complexity,
+    # then generate the rollout.
+    print(f"Starting: {scenario['id']}")
     scenario_copy = scenario.copy()
     scenario_copy["prompt"] = (
         "Generate a rollout of non-trivial complexity of a user and agent interacting together. "
         "This could involve multiple separate tool uses, and collaboration, and reading and editing large code files. "
         f"The user's initial request should be: '{scenario['prompt']}'"
     )
-    if scenario["notes"] != "":
+    if scenario.get("notes", ""):
         scenario_copy["prompt"] += f". The following complexity should also be introduced when relevant: '{scenario['notes']}'"
-    rollout, rejected = generate_rollout(scenario_copy)
+    rollout, rejected = generate_rollout(scenario_copy, api_url, api_key, model, system_prompt, max_retries=max_retries, critique=critique)
     if rollout:
         rollout["_scenario_id"] = scenario["id"]
         rollout["_scenario_prompt"] = scenario["prompt"]
         rollout["_generator_prompt"] = scenario_copy["prompt"]
-        print(f"  ✓ {scenario['id']} completed ({len(rollout.get('messages', []))} turns)")
-        if rejected is not None:
-            print("    rejected also saved.")
+        print(f"  Done: {scenario['id']} ({len(rollout.get('messages', []))} turns)")
         return rollout, rejected
     else:
-        print(f"  ✗ {scenario['id']} failed after retries")
+        print(f"  Failed: {scenario['id']} after retries")
         return None, None
 
 def main():
-    output_path = Path("rollouts/rollouts.jsonl")
-    output_path.parent.mkdir(exist_ok=True)
-    pref_output_path = Path("rollouts/preference_rollouts.jsonl")
-    pref_output_path.parent.mkdir(exist_ok=True)
-    
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--input', type=str, default='prompts/all_prompts.jsonl')
+    parser.add_argument('--output', type=str, default='rollouts/rollouts.jsonl')
+    parser.add_argument('--workers', type=int, default=10)
+    parser.add_argument('--model', type=str, default=None)
+    parser.add_argument('--api-url', type=str, default='http://localhost:8000/v1/chat/completions')
+    parser.add_argument('--openrouter', action='store_true', help='Use OpenRouter API (requires OPENROUTER_API_KEY)')
+    parser.add_argument('--max-retries', type=int, default=10)
+    parser.add_argument('--critique', action='store_true', help='Enable SOUL critique loop for each rollout')
+    parser.add_argument('--gold-rollouts', type=str, default=None, help='Path to gold-standard rollout examples (e.g. rollouts/gemini_cleaned.json)')
+    parser.add_argument('--dry-run', action='store_true')
+    args = parser.parse_args()
+
+    api_url = args.api_url
+    api_key = None
+    if args.openrouter:
+        api_url = "https://openrouter.ai/api/v1/chat/completions"
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if not api_key:
+            print("OPENROUTER_API_KEY not set")
+            return
+
+    # build system prompt with or without gold examples
+    if args.gold_rollouts:
+        with open(args.gold_rollouts) as f:
+            gold = json.load(f)
+        gold_section = f"\n\nThe following are gold-standard examples of a perfect rollout — please consult them carefully.\n\nGOLD_EXAMPLE:\n{json.dumps(gold, indent=2)}"
+    else:
+        gold_section = ""
+    system_prompt = SYSTEM_PROMPT_TEMPLATE + gold_section
+
     scenarios = []
-    with open("prompts/all_prompts.jsonl", "r") as f:
+    with open(args.input) as f:
         for line in f:
             scenarios.append(json.loads(line))
-    # scenarios = scenarios[:5]
-    max_workers = 10
-    completed = 0
-    failed = 0
-    
-    print(f"launching {len(scenarios)} scenarios across {max_workers} threads...\n")
-    
-    with ThreadPoolExecutor(max_workers=max_workers) as executor, open(output_path, "a") as out, open(pref_output_path, "a") as pref_out:
-        future_to_scenario = {executor.submit(process_single_scenario, s): s for s in scenarios}
+
+    if args.dry_run:
+        scenario = scenarios[0]
+        print(f"Scenario: {json.dumps(scenario, indent=2)}\n")
+        rollout, rejected = process_single_scenario(scenario, api_url, api_key, model, system_prompt, max_retries=args.max_retries, critique=args.critique)
+        if rollout:
+            print(f"\nRollout ({len(rollout['messages'])} messages):")
+            print(json.dumps(rollout, indent=2))
+        return
+
+    output_path = Path(args.output)
+    pref_output_path = output_path.with_suffix(".pref.jsonl")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    completed, failed = 0, 0
+    print(f"Launching {len(scenarios)} scenarios across {args.workers} threads...\n")
+
+    with ThreadPoolExecutor(max_workers=args.workers) as executor, \
+         open(output_path, "a") as out, open(pref_output_path, "a") as pref_out:
+        future_to_scenario = {executor.submit(process_single_scenario, s, api_url, api_key, model, system_prompt, args.max_retries, args.critique): s for s in scenarios}
         for future in as_completed(future_to_scenario):
-            res = future.result()
-            if res[0] is not None:
-                chosen, rejected = res
+            chosen, rejected = future.result()
+            if chosen is not None:
                 out.write(json.dumps(chosen) + "\n")
                 if rejected:
-                   pref_pair = {
-                       "prompt": chosen["_scenario_prompt"],
-                       "id": chosen["_scenario_id"],
-                       "generator_prompt": chosen["_generator_prompt"],
-                       "chosen": {"messages": chosen["messages"]},
-                       "rejected": {"messages": rejected["messages"]},
-                       
-                   }
-                   pref_out.write(json.dumps(pref_pair) + "\n")
+                    pref_pair = {
+                        "prompt": chosen["_scenario_prompt"],
+                        "id": chosen["_scenario_id"],
+                        "generator_prompt": chosen["_generator_prompt"],
+                        "chosen": {"messages": chosen["messages"]},
+                        "rejected": {"messages": rejected["messages"]},
+                    }
+                    pref_out.write(json.dumps(pref_pair) + "\n")
                 out.flush()
                 pref_out.flush()
                 completed += 1
             else:
                 failed += 1
-    
-    print(f"\ngenerated {completed}/{len(scenarios)} rollouts ({failed} failed)")
+
+    print(f"\nGenerated {completed}/{len(scenarios)} rollouts ({failed} failed)")
 
 if __name__ == "__main__":
     main()

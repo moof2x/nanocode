@@ -1,12 +1,14 @@
-# there's a nice paradigm in JAX where you can register dataclasses as PyTrees.
-# In JAX you can apply many tensor-adjacent operations to PyTrees, all of which
-# are well-supported by the compiler.
-# This is great for us. In this implementation, we'll separate state (model, optimizer params)
-# from the modeling code itself. We can define the state as a PyTree and all modeling
-# code will be applying transformations on this PyTree (or mapping data through it).
-# If you're wondering about the variable names here and in nanochat
-# they come from https://github.com/openai/gpt-2/blob/master/src/model.py
+"""
+A JAX-ified implementation of nanochat's gpt.py. 
+We use dataclasses and PyTrees here to represent our state (parameters), and we follow
+a functional programming paradigm; state is immuatable (and in JAX, Arrays are immutable),
+and all our modeling code performs purely transformations on this state.
 
+https://docs.jax.dev/en/latest/pytrees.html
+
+If you're wondering about the variable names here and in nanochat
+they come from https://github.com/openai/gpt-2/blob/master/src/model.py
+"""
 import itertools
 import operator
 from dataclasses import dataclass, replace
@@ -133,10 +135,6 @@ class Block:
 )
 @dataclass
 class GPT:
-    # in JAX we seperate "state" and "state transformations".
-    # Forward passes, graadient updates, etc. are all examples
-    # of purely functional transformations of state.
-
     # GPT() creates a tree-like data container which houses model parameters
     # and allows us to perform operations with JAX on this tree.
     # GPT.init() is a factory method which initializes this data container

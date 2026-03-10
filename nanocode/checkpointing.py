@@ -1,3 +1,9 @@
+"""
+Zarr-based checkpointing for model and optimizer state.
+We flatten the PyTree into (path, array) pairs and store each as a named Zarr array.
+
+https://zarr.readthedocs.io/en/stable/
+"""
 from dataclasses import replace
 from pathlib import Path
 

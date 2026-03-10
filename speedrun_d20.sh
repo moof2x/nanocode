@@ -32,7 +32,7 @@ ROLLOUTS_DIR="$NANOCODE_BASE_DIR/rollouts"
 hf download smohammadi/nanocode-tulu-selfoss-evol --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-tulu-selfoss-evol"
 hf download smohammadi/nanocode-long-context --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context"
 
-python -u -m scripts.chat_sft \
+python -u -m scripts.agentic_sft \
     --batch_size=64 \
     --minibatch_size=2 \
     --eval_every=500 \

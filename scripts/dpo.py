@@ -1,3 +1,5 @@
+"""DPO fine-tuning with IPO loss. Loads an SFT checkpoint and trains on paired preference data."""
+import argparse
 import operator
 import os
 import sys
@@ -15,7 +17,6 @@ from nanocode.eval import evaluate_bpb
 from nanocode.gpt import GPT, estimate_flops
 from nanocode.muon import Muon
 from nanocode.tokenizer import get_token_bytes, get_tokenizer
-from data.dataset import PreferenceDataset
 from data.json_dataset import JSONDataset, JSONPreferenceDataset, PairedJSONPreferenceDataset
 from data.common import SYSTEM_PROMPT
 from data.mixture import TaskMixture
@@ -23,42 +24,56 @@ from data.mixture import TaskMixture
 # distributed setup
 world_size, mesh = init_distributed()
 
-checkpoint = "sft"
+parser = argparse.ArgumentParser()
+parser.add_argument('--checkpoint', type=str, default='sft')
+parser.add_argument('--batch-size', type=int, default=32)
+parser.add_argument('--minibatch-size', type=int, default=32)
+parser.add_argument('--num-steps', type=int, default=-1)
+parser.add_argument('--num-epochs', type=int, default=1)
+parser.add_argument('--beta', type=float, default=0.5, help='IPO hparam')
+parser.add_argument('--eps', type=float, default=1e-10)
+parser.add_argument('--wd', type=float, default=0.0)
+parser.add_argument('--wte-lr', type=float, default=0.003)
+parser.add_argument('--lm-head-lr', type=float, default=0.0001)
+parser.add_argument('--lr', type=float, default=0.00005)
+parser.add_argument('--seed', type=int, default=42)
+parser.add_argument('--attn-impl', type=str, default='splash', choices=['splash', 'eager'])
+parser.add_argument('--accelerator-flops', type=float, default=918e12)
+parser.add_argument('--compute-dtype', type=str, default='bfloat16', choices=['bfloat16', 'float32'])
+parser.add_argument('--sample-every', type=int, default=50)
+parser.add_argument('--eval-every', type=int, default=50)
+parser.add_argument('--profile-every', type=int, default=500)
+args = parser.parse_args()
 
+checkpoint = args.checkpoint
 ### optimization hparams
-batch_size = 32
-minibatch_size = 32
-num_steps = -1
-num_epochs = 1
+batch_size = args.batch_size
+minibatch_size = args.minibatch_size
+num_steps = args.num_steps
+num_epochs = args.num_epochs
 # IPO hparam
-beta = 0.5
-
+beta = args.beta
 # learning rates
-eps = 1e-10
-wd = 0.0
-wte_lr = 0.003
-lm_head_lr = 0.0001
-lr = 0.00005
-
+eps = args.eps
+wd = args.wd
+wte_lr = args.wte_lr
+lm_head_lr = args.lm_head_lr
+lr = args.lr
 ### misc
-seed = 42
-attn_impl = "splash"
-accelerator_flops = 918e12 # TPU v6e
-compute_dtype = jnp.bfloat16
-
+seed = args.seed
+attn_impl = args.attn_impl
+accelerator_flops = args.accelerator_flops # TPU v6e
+compute_dtype = jnp.bfloat16 if args.compute_dtype == 'bfloat16' else jnp.float32
 ### training loop control
-sample_every = 50
-eval_every = 50
-profile_every = 500
+sample_every = args.sample_every
+eval_every = args.eval_every
+profile_every = args.profile_every
 
-config_keys = [k for k,v in globals().items() if not k.startswith("_") and isinstance(v, (int, float, bool, str))] + ["compute_dtype"]
-exec(open(os.path.join("nanocode", "configurator.py")).read()) # overrides from command line
 base_dir = get_base_dir()
 rollouts_dir = base_dir / "rollouts"
 model_dir = get_model_dir()
 setup_logging(model_dir / "dpo_log.txt")
-user_config = {k: globals()[k] for k in config_keys}
-for k, v in user_config.items():
+for k, v in vars(args).items():
     print0(f"  {k}: {v}")
 
 grad_accm_steps = batch_size // minibatch_size
@@ -350,13 +365,11 @@ def evaluate_dpo(model, ref_model, val_loader, steps):
     return total_loss / n, total_acc / n, margins, total_chosen / n, total_rejected / n
 
 
-# this time we tokenizer prompts using our chat template
 prompts = [
     "Can you fix the bug in hello.py?",
     "Can you implement a MLP layer for me?",
     "Where is the utils.py file located?",
 ]
-
 user_start, user_end = tokenizer.encode_special("<|user_start|>"), tokenizer.encode_special("<|user_end|>")
 assistant_start, assistant_end = tokenizer.encode_special("<|assistant_start|>"), tokenizer.encode_special("<|assistant_end|>")
 
@@ -397,7 +410,7 @@ for step in range(num_steps):
           new_tokens = generate(
             idx,
             model,
-            max_tokens=16,
+            max_tokens=64,
             temperature=None,
             compute_dtype=compute_dtype,
             pad_token_id=assistant_end,

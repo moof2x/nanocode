@@ -1,3 +1,6 @@
+"""
+Shared utilities for distributed setup, logging, and path resolution.
+"""
 import os
 from pathlib import Path
 

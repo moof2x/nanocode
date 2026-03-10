@@ -1,3 +1,4 @@
+"""A JAX AdamW implementation."""
 from dataclasses import dataclass
 from functools import partial
 

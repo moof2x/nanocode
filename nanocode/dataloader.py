@@ -1,3 +1,7 @@
+"""
+Adapted from nanochat's dataloader.py, but with support for mixing
+The Stack v2 into the pre-training data at a configurable code ratio.
+"""
 from functools import partial
 
 import jax
