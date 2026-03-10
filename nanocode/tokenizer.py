@@ -1,5 +1,5 @@
 """
-Taken from karparthy/nanochat/nanochat/ and stripped of the HF tokenizer. 
+Taken from nanochat/tokenizer.py, stripped of the HF tokenizer, and adding tokens and templating for tool calling. 
 """
 
 import copy
