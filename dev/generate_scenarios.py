@@ -1,57 +1,51 @@
-import json
-import os
-import re
-import random
-import requests
+"""
+This is a hacky script for generating a whole bunch of prompts to seed synthetic agentic dataset generation.
+
+Usage (quick local debugging):
+
+> llama-server \
+        -hf ggml-org/gpt-oss-20b-GGUF \
+        --port 8000 \
+        --ctx-size 16384 \
+        -ngl 99 \
+        -fa on \
+        --jinja
+> python dev/generate_scenarios.py --output=/tmp/scenarios.jsonl --workers=1 --batches=10 --model=ggml-org/gpt-oss-20b-GGUF --dry-run
+
+Bump workers and batches/try different models for scaling this out. 
+"""
+import json, random, argparse, requests
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
-# API_URL = "https://openrouter.ai/api/v1/chat/completions"
-API_URL = "http://localhost:8000/v1/completions"
-# Using a fast, cheap model for prompt generation
-# MODEL = "arcee-ai/trinity-large-preview:free"
-# MODEL = "google/gemini-2.5-flash-lite"
-MODEL = "Qwen/Qwen3-32B"
-
-# --- CONFIGURATION ---
 TASK_TYPES = [
-    "bug fix with stack trace", "performance optimization", "refactor / restructure",
-    "rename symbol across codebase", "dead code analysis", "add new feature",
-    "add tests", "fix failing tests", "update documentation", "config file changes",
-    "dependency migration", "api endpoint implementation", "security audit fix",
-    "resolve git conflicts", "codebase understanding", "code comparison", "remove feature",
-    "devops - deployment scaling", "devops - continuous integration"
+    "Bug fix with stack trace", "Performance optimization", "Refactor / restructure",
+    "Rename symbol across codebase", "Dead code analysis", "Add new feature",
+    "Add tests", "Fix failing tests", "Update documentation", "Config file changes",
+    "Dependency migration", "API endpoint implementation", "Security audit fix",
+    "Resolve git conflicts", "Codebase understanding", "Code comparison", "Remove feature",
+    "DevOps - deployment scaling", "DevOps - continuous integration"
 ]
 
-# COMPLEXITY_MODIFIERS = [
-#     "single file", "multi-file with grep", "requires bash exploration",
-#     "user rejects first attempt", "tool error then recovery",
-#     "ambiguous request needing clarification", "cross-module dependency logic",
-#     "git merge conflicts in progress",
-# ]
-
+# complexity modifiers add realistic failure modes.
 COMPLEXITY_MODIFIERS = [
-    "user rejects first attempt with a specific technical reason", 
-    "tool call should return an error (e.g. file not found)",
-    "ambiguous request needing clarification before acting", 
-    "cross-module dependency logic",
-    "user pivots mid-way",
+    "User rejects first attempt with a specific technical reason",
+    "Tool call should return an error (e.g. file not found)",
+    "Ambiguous request needing clarification before acting",
+    "Cross-module dependency logic",
+    "User pivots mid-way",
 ]
-
 COMPLEXITY_MODIFIERS += [""] * len(COMPLEXITY_MODIFIERS)
 
-
 CODEBASE_DOMAINS = [
-    "web api (fastapi)", "LLM training (jax)", "LLM training (torch)", "cli tool",
-    "data processing pipelines", "python testing framework", "config management",
-    "distributed systems", "transformers attention implementations",
-    "LLM evaluation suites", "implementing machine learning optimizers",
-    "creating hyperparameter sweep scripts", "machine learning (vision)",
-    "data science", "tokenizers", "Rust", "meaching learning (reinforcement learning)"
+    "Web API (FastAPI)", "LLM training (JAX)", "LLM training (PyTorch)", "CLI tool",
+    "Data processing pipelines", "Python testing framework", "Config management",
+    "Distributed systems", "Transformers attention implementations",
+    "LLM evaluation suites", "Implementing machine learning optimizers",
+    "Creating hyperparameter sweep scripts", "Machine learning (vision)",
+    "Data science", "Tokenizers", "Rust", "Machine learning (reinforcement learning)"
 ]
 
-# --- JSON SCHEMA ---
 SCENARIO_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
@@ -74,95 +68,97 @@ SCENARIO_SCHEMA = {
                 }
             },
             "required": ["scenarios"],
-            "additionalProperties": False 
+            "additionalProperties": False
         }
     }
 }
 
-def call_llm(messages, response_format=None, temperature=0.8):
-    headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        # "Content-Type": "application/json"
-    }
+
+VLLM_URL = "http://localhost:8000/v1/chat/completions"
+
+def call_vllm(prompt, model, temperature=0.8):
     payload = {
-        "model": MODEL,
-        "prompt": messages[0]["content"],
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
-        # "response_format": response_format
+        "response_format": SCENARIO_SCHEMA,
     }
-    res = requests.post(API_URL, headers=headers, json=payload)
-    # print(res, res.content)
-    # exit()
+    res = requests.post(VLLM_URL, json=payload, timeout=120)
     if res.status_code != 200:
-        print(f"Request failed! {res.content}")
+        print(f"  request failed ({res.status_code}): {res.content[:200]}")
         return None
-    content = res.json()["choices"]#[0]["message"]["content"]
-    # Robust JSON extraction from markdown
-    # match = re.search(r'(\{.*\})', content, re.DOTALL)
-    return content
-    return match.group(1) if match else content
+    return res.json()["choices"][0]["message"]["content"]
 
-def generate_batch(batch_idx):
-    # Select random constraints to ensure diversity
+
+def generate_batch(batch_idx, model):
     tasks = random.sample(TASK_TYPES, 5)
-    complexities = random.sample(COMPLEXITY_MODIFIERS, 1)[0]
+    complexity = random.choice(COMPLEXITY_MODIFIERS)
     domains = random.sample(CODEBASE_DOMAINS, 5)
-    
-    prompt = f"""
-    generate 20 highly realistic, diverse scenario prompts for a coding agent.
-    
-    constraints:
-    - task types: {', '.join(tasks)}
-    - domains: {', '.join(domains)}
 
-    each prompt must describe:
-    1. the codebase context (e.g. "in a jax-based training loop...")
-    2. the user's request (mix casual and professional tones)
+    prompt = f"""generate 20 highly realistic, diverse scenario prompts for a coding agent.
 
-    output as a json object with a 'scenarios' array.
-    """.strip()
+constraints:
+- task types: {', '.join(tasks)}
+- domains: {', '.join(domains)}
 
-    response = call_llm([{"role": "user", "content": prompt}], response_format=SCENARIO_SCHEMA)
-    if not response: return []
-    
+each prompt must describe:
+1. the codebase context (e.g. "in a jax-based training loop...")
+2. the user's request (mix casual and professional tones)
+
+output as a json object with a 'scenarios' array."""
+
+    response = call_vllm(prompt, model)
+    if not response:
+        return []
     try:
         data = json.loads(response)
         batch = data.get("scenarios", [])
         for item in batch:
             item["id"] = f"b{batch_idx}_{item['id']}"
-            item["notes"] = complexities
+            item["notes"] = complexity
         return batch
-    except:
+    except (json.JSONDecodeError, KeyError) as e:
+        print(f"  batch {batch_idx}: parse error: {e}")
         return []
-    
+
+
 def main():
-    output_path = Path("prompts/all_prompts.jsonl")
-    output_path.parent.mkdir(exist_ok=True)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--output', type=str, default='prompts/all_prompts.jsonl')
+    parser.add_argument('--batches', type=int, default=100)
+    parser.add_argument('--workers', type=int, default=10)
+    parser.add_argument('--model', type=str, default='Qwen/Qwen3.5-9B')
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--dry-run', action='store_true')
+    args = parser.parse_args()
 
-    num_batches = 100
-    max_workers = 10
+    random.seed(args.seed)
 
-    completed = 0
-    next_idx = 0
+    if args.dry_run:
+        scenarios = generate_batch(0, args.model)
+        print(json.dumps(scenarios, indent=2))
+        return
 
-    with open(output_path, "a") as f, ThreadPoolExecutor(max_workers=max_workers) as ex:
-        futures = set()
+    output_path = Path(args.output)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        while completed < num_batches:
-            while len(futures) < max_workers:
-                futures.add(ex.submit(generate_batch, next_idx))
-                next_idx += 1
+    total_scenarios = 0
+    with open(output_path, "a") as f, ThreadPoolExecutor(max_workers=args.workers) as ex:
+        futures = {ex.submit(generate_batch, i, args.model): i for i in range(args.batches)}
+        for future in as_completed(futures):
+            batch_idx = futures[future]
+            try:
+                batch = future.result()
+            except Exception as e:
+                print(f"  batch {batch_idx}: exception: {e}")
+                continue
+            for scenario in batch:
+                f.write(json.dumps(scenario) + "\n")
+            f.flush()
+            total_scenarios += len(batch)
+            print(f"  batch {batch_idx}: {len(batch)} scenarios (total: {total_scenarios})")
 
-            done, futures = futures.pop(), futures
-            batch = done.result()
-            print(batch)
-            if batch:
-                # for scenario in batch:
-                    # f.write(json.dumps(scenario) + "\n")
-                # f.flush()
-                print(batch[0])
-                completed += 1
-                print(f"completed {completed}/{num_batches}")
+    print(f"\ndone — {total_scenarios} scenarios written to {output_path}")
 
 
 if __name__ == "__main__":
