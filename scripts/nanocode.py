@@ -164,7 +164,7 @@ def run_agent(tokens, rng):
                 text_buffer += decoded
 
             if len(tokens) > max_seq_len:
-                print("(context limit reached)")
+                print("(Context limit reached)")
                 break
 
         if text_buffer and not verbose:
@@ -174,13 +174,26 @@ def run_agent(tokens, rng):
         if tool_called:
             tool_name, args = parse_tool_call(tool_buffer)
             print(f"\n[tool] {tool_name} {args}")
-            result = TOOLS.get(tool_name, lambda a: "error: unknown tool")(args)
-            print(f"\n--- tool result ---\n{result[:500]}\n---")
-            if verbose:
-                print(f"<|tool_result_start|>{result}<|tool_result_end|>")
-            tokens.append(SPECIAL_TOKENS["<|tool_result_start|>"])
-            tokens.extend(tokenizer.encode(result))
-            tokens.append(SPECIAL_TOKENS["<|tool_result_end|>"])
+            confirm = input("[y/n] > ").strip().lower()
+            if confirm in ("y", "yes", ""):
+                result = TOOLS.get(tool_name, lambda a: "error: unknown tool")(args)
+                print(f"\n--- tool result ---\n{result[:500]}\n---")
+                if verbose:
+                    print(f"<|tool_result_start|>{result}<|tool_result_end|>")
+                tokens.append(SPECIAL_TOKENS["<|tool_result_start|>"])
+                tokens.extend(tokenizer.encode(result))
+                tokens.append(SPECIAL_TOKENS["<|tool_result_end|>"])
+            else:
+                result = "rejected by user"
+                print(f"\n--- tool result ---\n{result}\n---")
+                tokens.append(SPECIAL_TOKENS["<|tool_result_start|>"])
+                tokens.extend(tokenizer.encode(result))
+                tokens.append(SPECIAL_TOKENS["<|tool_result_end|>"])
+                tokens.append(SPECIAL_TOKENS["<|user_start|>"])
+                followup = input("(explain why) > ").strip()
+                if followup:
+                    tokens.extend(tokenizer.encode(followup))
+                tokens.append(SPECIAL_TOKENS["<|user_end|>"])
         else:
             break
 
@@ -199,9 +212,13 @@ commands:
   /quit            - exit
 """)
 
-print(f"project root: {project_root}")
-print(f"model: {checkpoint} | sequence_len: {model_cfg.sequence_len}")
-print("type 'help' for commands\n")
+print("\n" + "=" * 60)
+print("WARNING: Nanocode executes real Bash commands on your")
+print("system and is able to modify files. Carefully review")
+print("tool calls before approving them.")
+print("=" * 60)
+print(f"\nModel: {checkpoint} | Sequence length: {model_cfg.sequence_len}")
+print("Type '/help' for commands\n")
 
 rng = jax.random.key(seed)
 tokens = [tokenizer.get_bos_token_id(), SPECIAL_TOKENS["<|user_start|>"]]
@@ -211,7 +228,7 @@ while True:
     try:
         line = input("> ").strip()
     except (EOFError, KeyboardInterrupt):
-        print("\ngoodbye")
+        print("\nGoodbye")
         break
 
     if not line:
@@ -228,7 +245,7 @@ while True:
         tokens = [tokenizer.get_bos_token_id(), SPECIAL_TOKENS["<|user_start|>"]]
         tokens.extend(tokenizer.encode(SYSTEM))
         rng = jax.random.key(seed)
-        print("cleared")
+        print("Cleared")
     elif cmd == "/show":
         print(f"tokens in context: {len(tokens)}/{model_cfg.sequence_len * 2}")
     elif cmd == "/export":
@@ -236,7 +253,7 @@ while True:
         fname = arg if arg else "conversation.json"
         with open(fname, "w") as f:
             json.dump({"tokens": tokens}, f)
-        print(f"exported to {fname}")
+        print(f"Exported to {fname}")
     else:
         msg = line
         tokens.extend(tokenizer.encode(msg))
