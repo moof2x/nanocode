@@ -17,6 +17,7 @@ from nanocode.muon import Muon
 
 
 def save_checkpoint(filename: Path, state: GPT | Muon):
+    # TODO this currently creates a single file on disk per parameter, which makes transfers very slow
     state_dict, _ = jax.tree.flatten_with_path(state)
     root = zarr.open_group(filename, mode="w")
 
