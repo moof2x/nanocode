@@ -1,4 +1,14 @@
-"""Agentic CLI for nanocode."""
+"""Agentic CLI for nanocode.
+
+To try this locally without training your own models, you can download checkpoints for either of the d12/d24 models I've trained:
+  # quick to run on your Mac but not very smart
+  > hf download smohammadi/nanocode_d12 nanocode_d12.tar.gz --local-dir /tmp && tar xzf /tmp/nanocode_d12.tar.gz -C ~/.cache/nanocode
+  # slow to run (requires GPU) but smarter
+  hf download smohammadi/nanocode_d24 nanocode_d24.tar.gz --local-dir /tmp && tar xzf /tmp/nanocode_d24.tar.gz -C ~/.cache/nanocode
+
+Run:
+  MODEL_TAG=d24 python -m scripts.nanocode # replace with d12 if you downloaded above, and add --compute-dtype float32 if you're running on CPU without bf16 support
+"""
 import argparse, json, subprocess
 from pathlib import Path
 
