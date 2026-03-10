@@ -37,6 +37,15 @@ model = load_checkpoint(checkpoint_dir / "model.zarr", model)
 
 project_root = Path.cwd()
 
+# ANSI color codes
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+CYAN = "\033[36m"
+RESET = "\033[0m"
+
 # token_name -> token_id
 SPECIAL_TOKENS = {name: tokenizer.encode_special(name) for name in [
     "<|user_start|>", "<|user_end|>",
@@ -141,7 +150,7 @@ def run_agent(tokens, rng):
         text_buffer = ""
         tool_called = False
 
-        print("\n[assistant] ", end="", flush=True)
+        print(f"\n{CYAN}{BOLD}[assistant]{RESET} ", end="", flush=True)
         new_tokens = generate(tokens, model, max_tokens, temperature, compute_dtype,
                               pad_token_id=SPECIAL_TOKENS["<|assistant_end|>"],
                               rng=rng,
@@ -180,27 +189,27 @@ def run_agent(tokens, rng):
 
         if tool_called:
             tool_name, args = parse_tool_call(tool_buffer)
-            print(f"\n[{tool_name}]")
+            print(f"\n{YELLOW}{BOLD}[{tool_name}]{RESET}")
             if tool_name == "Edit":
-                print(f"  file_path: {args['file_path']}")
+                print(f"  {DIM}file_path:{RESET} {args['file_path']}")
                 if "old_string" in args:
-                    print(f"  old_string:\n{fmt_lines(args['old_string'])}")
-                    print(f"  new_string:\n{fmt_lines(args['new_string'])}")
+                    print(f"  {RED}old_string:{RESET}\n{fmt_lines(args['old_string'])}")
+                    print(f"  {GREEN}new_string:{RESET}\n{fmt_lines(args['new_string'])}")
                 else:
-                    print(f"  contents:\n{fmt_lines(args['new_string'])}")
+                    print(f"  {GREEN}contents:{RESET}\n{fmt_lines(args['new_string'])}")
             else:
-                print("\n".join(f"  {k}: {v}" for k, v in args.items()))
+                print("\n".join(f"  {DIM}{k}:{RESET} {v}" for k, v in args.items()))
             if tool_name in ("Bash", "Edit"):
-                confirm = input("[y/n] > ").strip().lower()
+                confirm = input(f"{YELLOW}[y/n] > {RESET}").strip().lower()
                 if confirm not in ("y", "yes", ""):
                     result = "rejected by user"
-                    print(f"\n--- tool result ---\n{result}\n---")
+                    print(f"\n{DIM}--- tool result ---{RESET}\n{RED}{result}{RESET}\n{DIM}---{RESET}")
                     tokens.append(SPECIAL_TOKENS["<|tool_result_start|>"])
                     tokens.extend(tokenizer.encode(result))
                     tokens.append(SPECIAL_TOKENS["<|tool_result_end|>"])
                     break # break back to user input loop
             result = TOOLS.get(tool_name, lambda a: "error: unknown tool")(args)
-            print(f"\n--- tool result ---\n{result[:500]}\n---")
+            print(f"\n{DIM}--- tool result ---{RESET}\n{result[:500]}\n{DIM}---{RESET}")
             if verbose:
                 print(f"<|tool_result_start|>{result}<|tool_result_end|>")
             # inject tool result into context
@@ -214,8 +223,8 @@ def run_agent(tokens, rng):
     rng, _ = jax.random.split(rng) # advance rng state between turns
     return tokens, rng
 
-HELP = """
-Commands:
+HELP = f"""
+{BOLD}Commands:{RESET}
   <message>        - Send message to the agent
   /clear           - Clear conversation and context
   /show            - Show token count
@@ -224,11 +233,11 @@ Commands:
   /quit            - Exit
 """
 
-print("\n" + "=" * 60)
+print(f"\n{RED}{BOLD}{'=' * 60}")
 print("WARNING: Nanocode executes real Bash commands on your")
 print("system and is able to modify files. Carefully review")
-print("tool calls before approving them.")
-print("=" * 60)
+print(f"tool calls before approving them.")
+print(f"{'=' * 60}{RESET}")
 print(f"\nModel: {checkpoint} | Sequence length: {model_cfg.sequence_len}")
 print("Type '/help' for commands\n")
 
@@ -238,7 +247,7 @@ tokens.extend(tokenizer.encode(SYSTEM))
 
 while True:
     try:
-        line = input("> ").strip()
+        line = input(f"{BOLD}> {RESET}").strip()
     except (EOFError, KeyboardInterrupt):
         print("\nGoodbye")
         break
