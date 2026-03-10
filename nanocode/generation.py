@@ -55,6 +55,8 @@ def generate(
     rng,
     assistant_end_id: int | None = None
 ) -> list[jax.Array]:
+    # TODO: this currently creates a new cache from scratch for every call
+    # this is fine for single-turn generation but multi-turn interactions become slow
     model_cfg = model.cfg
     max_seq_len = model_cfg.sequence_len * 2
     kv_cache = KVCache.init(
