@@ -322,11 +322,9 @@ def fmt_metric(name, value):
 def write_report(sections, tok_info, report_dir, report_path):
     with open(report_path, 'w') as f:
         f.write(REPORT_CSS + '\n')
-        motd_path = Path('motd.txt')
-        if motd_path.exists():
-            f.write('```\n')
-            f.write(motd_path.read_text())
-            f.write('```\n\n')
+        f.write('```\n')
+        f.write(open('motd.txt').read())
+        f.write('```\n\n')
         f.write('# nanocode training report\n\n')
 
         # table of contents
