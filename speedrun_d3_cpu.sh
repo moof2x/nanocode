@@ -13,18 +13,18 @@ python -m data.pretrain -d fineweb-edu -n 2
 python -m data.pretrain -d the-stack-v2-dedup -n 2
 
 if [ ! -d "$NANOCODE_BASE_DIR/$MODEL_TAG/tokenizer" ]; then
-    python -m scripts.tok_train --max_chars=1000000000 --vocab_size=8000
+    python -m scripts.tok_train --max-chars=1000000000 --vocab-size=8000
     python -m scripts.tok_eval
 fi
 
 python -u -m scripts.base_train \
-    --batch_size=128 \
-    --minibatch_size=32 \
-    --config=configs.d3 \
-    --attn_impl=eager \
-    --num_steps=10 \
-    --eval_every=10 \
-    --sample_every=10
+    --batch-size=128 \
+    --minibatch-size=32 \
+    --config=d3 \
+    --attn-impl=eager \
+    --num-steps=10 \
+    --eval-every=10 \
+    --sample-every=10
 python -u -m scripts.base_eval --checkpoint=base --minibatch-size=32 --max-per-task=100 --attn-impl=eager
 
 # download SFT rollout datasets
@@ -33,24 +33,24 @@ hf download smohammadi/nanocode-tulu-selfoss-evol --repo-type dataset --local-di
 hf download smohammadi/nanocode-long-context --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context"
 
 python -u -m scripts.agentic_sft \
-    --batch_size=128 \
-    --minibatch_size=32 \
-    --attn_impl=eager \
-    --num_steps=10 \
-    --eval_every=10 \
-    --sample_every=10
+    --batch-size=128 \
+    --minibatch-size=32 \
+    --attn-impl=eager \
+    --num-steps=10 \
+    --eval-every=10 \
+    --sample-every=10
 
 # download DPO preference datasets
 hf download smohammadi/nanocode-tulu-selfoss-evol-preference --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-tulu-selfoss-evol-preference"
 hf download smohammadi/nanocode-long-context-preference --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context-preference"
 
 python -u -m scripts.dpo \
-    --batch_size=128 \
-    --minibatch_size=32 \
-    --attn_impl=eager \
-    --num_steps=10 \
-    --eval_every=10 \
-    --sample_every=10
+    --batch-size=128 \
+    --minibatch-size=32 \
+    --attn-impl=eager \
+    --num-steps=10 \
+    --eval-every=10 \
+    --sample-every=10
 
 python -m scripts.report
 
@@ -60,4 +60,4 @@ echo "copy reports/d3/ to your local machine, e.g. using scp, then:"
 echo "  brew install pandoc"
 echo "  pandoc reports/d3/report.md -o reports/d3/report.html --standalone"
 echo "to chat with your model:"
-echo "  NANOCODE_BASE_DIR=$NANOCODE_BASE_DIR MODEL_TAG=$MODEL_TAG python -m scripts.nanocode --max_tokens=1024"
+echo "  NANOCODE_BASE_DIR=$NANOCODE_BASE_DIR MODEL_TAG=$MODEL_TAG python -m scripts.nanocode --max-tokens=1024"

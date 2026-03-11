@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-
 from nanocode.common import get_model_dir
 
 # -----------------------------------------------------------------------------
@@ -241,7 +240,8 @@ PHASES = {
         'parsers': [
             (parse_dpo_metrics, [('loss', 'loss', 'loss'), ('accuracy', 'accuracy', 'acc'), ('margins', 'margin', 'margins'),
                                   ({'chosen_reward', 'rejected_reward'}, 'reward', 'rewards')]),
-            (parse_dpo_eval, [('*', 'value', 'val')]),
+            (parse_dpo_eval, [('rollout_val_bpb', 'bpb', 'val_bpb'), ('val_loss', 'loss', 'val_loss'),
+                              ('val_acc', 'accuracy', 'val_acc'), ('val_margins', 'margin', 'val_margins')]),
             (parse_training_steps, [('mfu', 'MFU (%)', 'mfu'), ('tkps', 'tkps', 'tkps')]),
             (parse_memory, [('*', 'GB', 'memory')]),
         ],

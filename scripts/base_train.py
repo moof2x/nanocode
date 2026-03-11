@@ -8,10 +8,14 @@ import time
 
 import jax
 import jax.numpy as jnp
-
-from nanocode import configs
 from nanocode.checkpointing import save_checkpoint
-from nanocode.common import get_base_dir, get_model_dir, init_distributed, print0, setup_logging
+from nanocode.common import (
+    get_base_dir,
+    get_model_dir,
+    init_distributed,
+    print0,
+    setup_logging,
+)
 from nanocode.dataloader import get_distributed_dataloader
 from nanocode.eval import evaluate_bpb
 from nanocode.generation import generate
@@ -19,6 +23,8 @@ from nanocode.gpt import GPT, calculate_loss, estimate_flops
 from nanocode.muon import Muon
 from nanocode.tokenizer import get_token_bytes, get_tokenizer
 from scripts.base_eval import evaluate_model
+
+from nanocode import configs
 
 # distributed setup
 world_size, mesh = init_distributed()

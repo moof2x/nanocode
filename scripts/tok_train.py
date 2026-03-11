@@ -12,9 +12,8 @@ import time
 
 import numpy as np
 import zarr
-
-from nanocode.common import get_model_dir, init_distributed, print0, setup_logging
 from data.pretrain import parquets_iter_batched
+from nanocode.common import get_model_dir, init_distributed, print0, setup_logging
 from nanocode.tokenizer import RustBPETokenizer
 
 init_distributed()
@@ -22,10 +21,10 @@ init_distributed()
 # Parse command line arguments
 
 parser = argparse.ArgumentParser(description='Train a BPE tokenizer')
-parser.add_argument('--max_chars', type=int, default=10_000_000_000, help='Maximum characters to train on (default: 10B)') 
-parser.add_argument('--doc_cap', type=int, default=10_000, help='Maximum characters per document (default: 10,000)')
-parser.add_argument('--vocab_size', type=int, default=32768, help='Vocabulary size (default: 32768, GPT2-small)')
-parser.add_argument('--code_ratio', type=float, default=0.2, help='Fraction of code data (default: 0.2)')
+parser.add_argument('--max-chars', type=int, default=10_000_000_000, help='Maximum characters to train on (default: 10B)')
+parser.add_argument('--doc-cap', type=int, default=10_000, help='Maximum characters per document (default: 10,000)')
+parser.add_argument('--vocab-size', type=int, default=32768, help='Vocabulary size (default: 32768, GPT2-small)')
+parser.add_argument('--code-ratio', type=float, default=0.2, help='Fraction of code data (default: 0.2)')
 args = parser.parse_args()
 print0(f"max_chars: {args.max_chars:,}")
 print0(f"doc_cap: {args.doc_cap:,}")

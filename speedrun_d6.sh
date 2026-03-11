@@ -15,16 +15,16 @@ python -m data.pretrain -d fineweb-edu -n 5
 python -m data.pretrain -d the-stack-v2-dedup -n 2
 
 if [ ! -d "$NANOCODE_BASE_DIR/$MODEL_TAG/tokenizer" ]; then
-    python -m scripts.tok_train --max_chars=1000000000 --vocab_size=16384
+    python -m scripts.tok_train --max-chars=1000000000 --vocab-size=16384
     python -m scripts.tok_eval
 fi
 
 python -u -m scripts.base_train \
-    --batch_size=64 \
-    --minibatch_size=16 \
-    --config=configs.d6 \
-    --eval_every=500 \
-    --sample_every=500
+    --batch-size=64 \
+    --minibatch-size=16 \
+    --config=d6 \
+    --eval-every=500 \
+    --sample-every=500
 python -u -m scripts.base_eval --checkpoint=base --minibatch-size=16 --max-per-task=500
 
 # download SFT rollout datasets
@@ -33,20 +33,20 @@ hf download smohammadi/nanocode-tulu-selfoss-evol --repo-type dataset --local-di
 hf download smohammadi/nanocode-long-context --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context"
 
 python -u -m scripts.agentic_sft \
-    --batch_size=64 \
-    --minibatch_size=16 \
-    --eval_every=250 \
-    --sample_every=250
+    --batch-size=64 \
+    --minibatch-size=16 \
+    --eval-every=250 \
+    --sample-every=250
 
 # download DPO preference datasets
 hf download smohammadi/nanocode-tulu-selfoss-evol-preference --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-tulu-selfoss-evol-preference"
 hf download smohammadi/nanocode-long-context-preference --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context-preference"
 
 python -u -m scripts.dpo \
-    --batch_size=64 \
-    --minibatch_size=16 \
-    --eval_every=100 \
-    --sample_every=100
+    --batch-size=64 \
+    --minibatch-size=16 \
+    --eval-every=100 \
+    --sample-every=100
 
 python -m scripts.report
 
@@ -56,4 +56,4 @@ echo "copy reports/d6/ to your local machine, e.g. using scp, then:"
 echo "  brew install pandoc"
 echo "  pandoc reports/d6/report.md -o reports/d6/report.html --standalone"
 echo "to chat with your model:"
-echo "  NANOCODE_BASE_DIR=$NANOCODE_BASE_DIR MODEL_TAG=$MODEL_TAG python -m scripts.nanocode --max_tokens=1024"
+echo "  MODEL_TAG=d6 python -m scripts.nanocode --max-tokens=1024 --attn-impl=splash"

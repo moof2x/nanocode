@@ -9,17 +9,26 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import numpy as np
-
+from data.common import SYSTEM_PROMPT
+from data.json_dataset import (
+    JSONDataset,
+    JSONPreferenceDataset,
+    PairedJSONPreferenceDataset,
+)
+from data.mixture import TaskMixture
 from nanocode.checkpointing import load_checkpoint, load_model_config, save_checkpoint
-from nanocode.common import get_base_dir, get_model_dir, init_distributed, print0, setup_logging
-from nanocode.generation import generate
+from nanocode.common import (
+    get_base_dir,
+    get_model_dir,
+    init_distributed,
+    print0,
+    setup_logging,
+)
 from nanocode.eval import evaluate_bpb
+from nanocode.generation import generate
 from nanocode.gpt import GPT, estimate_flops
 from nanocode.muon import Muon
 from nanocode.tokenizer import get_token_bytes, get_tokenizer
-from data.json_dataset import JSONDataset, JSONPreferenceDataset, PairedJSONPreferenceDataset
-from data.common import SYSTEM_PROMPT
-from data.mixture import TaskMixture
 
 # distributed setup
 world_size, mesh = init_distributed()

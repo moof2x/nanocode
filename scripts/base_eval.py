@@ -1,27 +1,31 @@
 """
 Adapted from nanochat/scripts/base_eval.py
 """
-import os
 import csv
-import time
 import json
-import yaml
-import shutil
+import os
 import random
-import zipfile
+import shutil
 import tempfile
+import time
+import zipfile
 
 import jax
 import jax.numpy as jnp
-
-from nanocode.common import get_base_dir, get_model_dir, print0, init_distributed, setup_logging
+import yaml
+from nanocode.checkpointing import load_checkpoint, load_model_config
+from nanocode.common import (
+    get_base_dir,
+    get_model_dir,
+    init_distributed,
+    print0,
+    setup_logging,
+)
+from nanocode.core_eval import evaluate_task
 from nanocode.dataloader import get_distributed_dataloader
 from nanocode.eval import evaluate_bpb
-from nanocode.tokenizer import get_tokenizer, get_token_bytes
-from nanocode.checkpointing import load_checkpoint, load_model_config
 from nanocode.gpt import GPT
-from nanocode.core_eval import evaluate_task
-
+from nanocode.tokenizer import get_token_bytes, get_tokenizer
 
 eval_bundle_url = "https://karpathy-public.s3.us-west-2.amazonaws.com/eval_bundle.zip"
 

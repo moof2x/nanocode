@@ -1,20 +1,26 @@
 """Agentic CLI for nanocode.
 
 To try this locally without training your own models, you can download checkpoints for either of the d12/d24 models I've trained:
-  # quick to run on your Mac but not very smart
-  > hf download smohammadi/nanocode_d12 nanocode_d12.tar.gz --local-dir /tmp && tar xzf /tmp/nanocode_d12.tar.gz -C ~/.cache/nanocode
-  # slow to run (requires GPU) but smarter
-  hf download smohammadi/nanocode_d24 nanocode_d24.tar.gz --local-dir /tmp && tar xzf /tmp/nanocode_d24.tar.gz -C ~/.cache/nanocode
+
+- Quick to run on your Mac but not very smart
+> hf download smohammadi/nanocode_d12 nanocode_d12.tar.gz --local-dir /tmp && tar xzf /tmp/nanocode_d12.tar.gz -C ~/.cache/nanocode
+
+- Slow to run (requires GPU) but smarter
+hf download smohammadi/nanocode_d24 nanocode_d24.tar.gz --local-dir /tmp && tar xzf /tmp/nanocode_d24.tar.gz -C ~/.cache/nanocode
 
 Run:
-  MODEL_TAG=d24 python -m scripts.nanocode # replace with d12 if you downloaded above, and add --compute-dtype float32 if you're running on CPU without bf16 support
+
+MODEL_TAG=d24 python -m scripts.nanocode
+
+Replace with d12 if you downloaded above, and add --attn-iompl
 """
-import argparse, json, subprocess
+import argparse
+import re
+import subprocess
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-
 from nanocode.checkpointing import load_checkpoint, load_model_config
 from nanocode.common import get_model_dir
 from nanocode.generation import generate
@@ -24,9 +30,10 @@ from nanocode.tokenizer import get_tokenizer
 parser = argparse.ArgumentParser()
 parser.add_argument('--checkpoint', type=str, default='dpo')
 parser.add_argument('--compute-dtype', type=str, default='bfloat16', choices=['bfloat16', 'float32'])
+parser.add_argument('--attn-impl', type=str, default="eager", help="Attention backend: splash (TPU) or eager")
 parser.add_argument('--max-tokens', type=int, default=512)
 parser.add_argument('--seed', type=int, default=42)
-parser.add_argument('--temperature', type=float, default=0.6)
+parser.add_argument('--temperature', type=float, default=0.5)
 parser.add_argument('--verbose', action='store_true')
 args = parser.parse_args()
 
@@ -42,7 +49,7 @@ model_dir = get_model_dir()
 checkpoint_dir = model_dir / f"{checkpoint}_checkpoints"
 model_cfg = load_model_config(checkpoint_dir / "model.zarr")
 rng = jax.random.key(seed)
-model = GPT.init(model_cfg, rng, "eager")
+model = GPT.init(model_cfg, rng, attn_impl=args.attn_impl)
 model = load_checkpoint(checkpoint_dir / "model.zarr", model)
 
 project_root = Path.cwd()
@@ -96,7 +103,14 @@ def tool_read(args):
 def tool_edit(args):
     file_path = project_root / args.get("file_path", "")
     old_string, new_string = args.get("old_string"), args.get("new_string", "")
+    # model sometimes copies the "    1→" line-number prefix from tool_results into edit args
+    strip_linenos = lambda s: re.sub(r"^ *\d+→", "", s, flags=re.MULTILINE)
+    if old_string is not None:
+        old_string = strip_linenos(old_string)
+    new_string = strip_linenos(new_string)
     if old_string is None: # no old_string means create new file
+        if file_path.exists():
+            return "error: file already exists, use old_string to edit"
         file_path.parent.mkdir(parents=True, exist_ok=True)
         file_path.write_text(new_string)
         return str(file_path) + "\n" + fmt_lines(new_string)
@@ -204,9 +218,8 @@ def run_agent(tokens, rng):
                 print(f"  {DIM}file_path:{RESET} {args['file_path']}")
                 if "old_string" in args:
                     print(f"  {RED}old_string:{RESET}\n{fmt_lines(args['old_string'])}")
+                if "new_string" in args:
                     print(f"  {GREEN}new_string:{RESET}\n{fmt_lines(args['new_string'])}")
-                else:
-                    print(f"  {GREEN}contents:{RESET}\n{fmt_lines(args['new_string'])}")
             else:
                 print("\n".join(f"  {DIM}{k}:{RESET} {v}" for k, v in args.items()))
             if tool_name in ("Bash", "Edit"):
@@ -219,7 +232,8 @@ def run_agent(tokens, rng):
                     tokens.append(SPECIAL_TOKENS["<|tool_result_end|>"])
                     break # break back to user input loop
             result = TOOLS.get(tool_name, lambda a: "error: unknown tool")(args)
-            print(f"\n{DIM}--- tool result ---{RESET}\n{result[:500]}\n{DIM}---{RESET}")
+            truncated = f"{result[:500]}\n{DIM}[truncated]{RESET}" if len(result) > 500 else result
+            print(f"\n{DIM}--- tool result ---{RESET}\n{truncated}\n{DIM}---{RESET}")
             if verbose:
                 print(f"<|tool_result_start|>{result}<|tool_result_end|>")
             # inject tool result into context
@@ -238,7 +252,6 @@ HELP = f"""
   <message>        - Send message to the agent
   /clear           - Clear conversation and context
   /show            - Show token count
-  /export [file]   - Export tokens to JSON
   /help            - Show this help
   /quit            - Exit
 """
@@ -279,11 +292,6 @@ while True:
         print("Cleared")
     elif cmd == "/show":
         print(f"Tokens in context: {len(tokens)}/{model_cfg.sequence_len * 2}")
-    elif cmd == "/export":
-        fname = arg if arg else "conversation.json"
-        with open(fname, "w") as f:
-            json.dump({"tokens": tokens}, f)
-        print(f"Exported to {fname}")
     else:
         tokens.extend(tokenizer.encode(line))
         tokens.append(SPECIAL_TOKENS["<|user_end|>"])

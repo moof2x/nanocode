@@ -15,16 +15,16 @@ python -m data.pretrain -d fineweb-edu -n 300
 python -m data.pretrain -d the-stack-v2-dedup -n 60
 
 if [ ! -d "$NANOCODE_BASE_DIR/$MODEL_TAG/tokenizer" ]; then
-    python -m scripts.tok_train --max_chars=2000000000
+    python -m scripts.tok_train --max-chars=2000000000
     python -m scripts.tok_eval
 fi
 
 python -u -m scripts.base_train \
-    --batch_size=32 \
-    --minibatch_size=1 \
-    --config=configs.d24 \
-    --eval_every=500 \
-    --sample_every=500
+    --batch-size=32 \
+    --minibatch-size=1 \
+    --config=d24 \
+    --eval-every=500 \
+    --sample-every=500
 python -u -m scripts.base_eval --checkpoint=base --minibatch-size=8
 
 # download SFT rollout datasets
@@ -33,20 +33,20 @@ hf download smohammadi/nanocode-tulu-selfoss-evol --repo-type dataset --local-di
 hf download smohammadi/nanocode-long-context --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context"
 
 python -u -m scripts.agentic_sft \
-    --batch_size=32 \
-    --minibatch_size=1 \
-    --eval_every=500 \
-    --sample_every=500
+    --batch-size=32 \
+    --minibatch-size=1 \
+    --eval-every=500 \
+    --sample-every=500
 
 # download DPO preference datasets
 hf download smohammadi/nanocode-tulu-selfoss-evol-preference --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-tulu-selfoss-evol-preference"
 hf download smohammadi/nanocode-long-context-preference --repo-type dataset --local-dir "$ROLLOUTS_DIR/nanocode-long-context-preference"
 
 python -u -m scripts.dpo \
-    --batch_size=32 \
-    --minibatch_size=1 \
-    --eval_every=100 \
-    --sample_every=100
+    --batch-size=32 \
+    --minibatch-size=1 \
+    --eval-every=100 \
+    --sample-every=100
 
 python -m scripts.report
 
@@ -56,4 +56,4 @@ echo "copy reports/d24/ to your local machine, e.g. using scp, then:"
 echo "  brew install pandoc"
 echo "  pandoc reports/d24/report.md -o reports/d24/report.html --standalone"
 echo "to chat with your model:"
-echo "  NANOCODE_BASE_DIR=$NANOCODE_BASE_DIR MODEL_TAG=$MODEL_TAG python -m scripts.nanocode --max_tokens=2048"
+echo "  MODEL_TAG=d24 python -m scripts.nanocode --max-tokens=4096 --attn-impl=splash"

@@ -2,8 +2,8 @@
 Evaluate compression ratio of the tokenizer.
 """
 
-from nanocode.common import get_model_dir, init_distributed, print0, setup_logging
 from data.pretrain import parquets_iter_batched
+from nanocode.common import get_model_dir, init_distributed, print0, setup_logging
 from nanocode.tokenizer import RustBPETokenizer, get_tokenizer
 
 # distributed/logging setup
