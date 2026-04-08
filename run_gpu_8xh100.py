@@ -14,7 +14,7 @@ import os
 import time
 
 os.environ["OMP_NUM_THREADS"] = "1"
-# os.environ["NANOCODE_BASE_DIR"] = os.path.expanduser("~/.cache/nanocode")
+os.environ["NANOCODE_BASE_DIR"] = os.path.expanduser("~/.cache/nanocode")
 os.environ["MODEL_TAG"] = "d12"
 
 PYTHON = sys.executable
