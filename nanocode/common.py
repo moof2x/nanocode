@@ -17,6 +17,11 @@ def get_base_dir() -> Path:
     base_dir.mkdir(parents=True, exist_ok=True)
     return base_dir
 
+def get_data_dir() -> Path:
+    data_dir = Path(os.environ.get("NANOCODE_DATA_DIR", get_base_dir()))
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
+
 def get_model_dir() -> Path:
     base_dir = get_base_dir()
     tag = os.environ.get("MODEL_TAG")
