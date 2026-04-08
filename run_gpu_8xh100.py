@@ -41,10 +41,10 @@ def run(cmd, desc=""):
 start = time.time()
 
 # 1. Download pretraining data
-run([PYTHON, "-m", "data.pretrain", "-d", "fineweb-edu", "-n", "40"],
-    "Download fineweb-edu")
-run([PYTHON, "-m", "data.pretrain", "-d", "the-stack-v2-dedup", "-n", "10"],
-    "Download the-stack-v2-dedup")
+#run([PYTHON, "-m", "data.pretrain", "-d", "fineweb-edu", "-n", "40"],
+#    "Download fineweb-edu")
+#run([PYTHON, "-m", "data.pretrain", "-d", "the-stack-v2-dedup", "-n", "10"],
+#    "Download the-stack-v2-dedup")
 
 # 2. Train tokenizer (if not already done)
 tok_dir = os.path.join(BASE_DIR, MODEL_TAG, "tokenizer")
@@ -73,15 +73,15 @@ run([PYTHON, "-u", "-m", "scripts.base_eval",
     "Base eval")
 
 # 5. Download SFT datasets
-rollouts_dir = os.path.join(BASE_DIR, "rollouts")
-run(["hf", "download", "smohammadi/nanocode-tulu-selfoss-evol",
-     "--repo-type", "dataset", "--local-dir",
-     os.path.join(rollouts_dir, "nanocode-tulu-selfoss-evol")],
-    "Download SFT dataset (tulu-selfoss-evol)")
-run(["hf", "download", "smohammadi/nanocode-long-context",
-     "--repo-type", "dataset", "--local-dir",
-     os.path.join(rollouts_dir, "nanocode-long-context")],
-    "Download SFT dataset (long-context)")
+#rollouts_dir = os.path.join(BASE_DIR, "rollouts")
+#run(["hf", "download", "smohammadi/nanocode-tulu-selfoss-evol",
+#     "--repo-type", "dataset", "--local-dir",
+#     os.path.join(rollouts_dir, "nanocode-tulu-selfoss-evol")],
+#    "Download SFT dataset (tulu-selfoss-evol)")
+#run(["hf", "download", "smohammadi/nanocode-long-context",
+#     "--repo-type", "dataset", "--local-dir",
+#     os.path.join(rollouts_dir, "nanocode-long-context")],
+#    "Download SFT dataset (long-context)")
 
 # 6. Agentic SFT
 run([PYTHON, "-u", "-m", "scripts.agentic_sft",
@@ -92,14 +92,14 @@ run([PYTHON, "-u", "-m", "scripts.agentic_sft",
     "Agentic SFT")
 
 # 7. Download DPO datasets
-run(["hf", "download", "smohammadi/nanocode-tulu-selfoss-evol-preference",
-     "--repo-type", "dataset", "--local-dir",
-     os.path.join(rollouts_dir, "nanocode-tulu-selfoss-evol-preference")],
-    "Download DPO dataset (preference)")
-run(["hf", "download", "smohammadi/nanocode-long-context-preference",
-     "--repo-type", "dataset", "--local-dir",
-     os.path.join(rollouts_dir, "nanocode-long-context-preference")],
-    "Download DPO dataset (long-context preference)")
+#run(["hf", "download", "smohammadi/nanocode-tulu-selfoss-evol-preference",
+#     "--repo-type", "dataset", "--local-dir",
+#     os.path.join(rollouts_dir, "nanocode-tulu-selfoss-evol-preference")],
+#    "Download DPO dataset (preference)")
+#run(["hf", "download", "smohammadi/nanocode-long-context-preference",
+#     "--repo-type", "dataset", "--local-dir",
+#     os.path.join(rollouts_dir, "nanocode-long-context-preference")],
+#    "Download DPO dataset (long-context preference)")
 
 # 8. DPO
 # DPO holds both policy + ref model in memory, so per-device memory is higher.
