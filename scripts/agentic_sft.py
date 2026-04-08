@@ -17,6 +17,7 @@ from data.sequence import TaskSequence
 from nanocode.checkpointing import load_checkpoint, load_model_config, save_checkpoint
 from nanocode.common import (
     get_base_dir,
+    get_data_dir,
     get_model_dir,
     init_distributed,
     print0,
@@ -76,7 +77,7 @@ eval_every = args.eval_every
 profile_every = args.profile_every
 
 base_dir = get_base_dir()
-rollouts_dir = base_dir / "rollouts"
+rollouts_dir = get_data_dir() / "rollouts"
 model_dir = get_model_dir()
 setup_logging(model_dir / "agentic_sft_log.txt")
 for k, v in vars(args).items():
