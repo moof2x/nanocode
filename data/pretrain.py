@@ -17,7 +17,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import requests
 
-from nanocode.common import get_base_dir, init_distributed, print0
+from nanocode.common import get_data_dir, init_distributed, print0
 
 # -----------------------------------------------------------------------------
 # The specifics of the current pretraining dataset
@@ -25,7 +25,7 @@ from nanocode.common import get_base_dir, init_distributed, print0
 # The URL on the internet where the data is hosted and downloaded from on demand
 index_to_filename = lambda index: f"shard_{index:05d}.parquet" # format of the filenames
 
-DATA_DIR = get_base_dir() / "base_data"
+DATA_DIR = get_data_dir() / "base_data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # -----------------------------------------------------------------------------
